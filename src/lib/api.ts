@@ -6,6 +6,9 @@ export const API_ROUTES = {
   ADMIN_DELETE_ORG: `${BASE_URL}/admin/organization/delete`,
   ADMIN_UPDATE_USER: (userId: string) => `${BASE_URL}/admin/users/${userId}`,
   ADMIN_DELETE_USER: (userId: string) => `${BASE_URL}/admin/users/${userId}`,
+  // Profile admin endpoints (server-side service-role)
+  ADMIN_PROFILE_UPSERT: `${BASE_URL}/admin/profile/upsert`,
+  ADMIN_PROFILE_DELETE: `${BASE_URL}/admin/profile/delete`,
   
   RESUME_UPLOAD: `${BASE_URL}/resumes/upload`,
   RESUME_COMPARE: `${BASE_URL}/resumes/compare`,

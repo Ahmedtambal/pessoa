@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabaseClient';
 import { Mail, Lock, Eye, EyeOff, User, ArrowRight } from 'lucide-react';
+import { API_ROUTES } from '../lib/api';
+import authFetch from '../lib/authFetch';
 
 const InviteSignUpPage: React.FC = () => {
   const [formData, setFormData] = useState({ fullName: '', password: '', confirmPassword: '' });
@@ -87,11 +89,9 @@ const InviteSignUpPage: React.FC = () => {
 
         // Call backend endpoint that uses the service-role client to upsert the profile.
         try {
-          const { data: sessionData } = await supabase.auth.getSession();
-          const token = sessionData?.session?.access_token || '';
-          const resp = await fetch('http://127.0.0.1:8000/admin/profile/upsert', {
+          const resp = await authFetch(API_ROUTES.ADMIN_PROFILE_UPSERT, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ full_name: profilePayload.full_name || null, organization_name: profilePayload.organization_name || null })
           });
           const json = await resp.json();

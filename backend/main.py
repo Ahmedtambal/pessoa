@@ -1,13 +1,21 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 import os
-from api.routes import jd_generator, resume_analyzer, admin # <-- IMPORT NEW ROUTER
+
+from api.routes import jd_generator, resume_analyzer, admin  # <-- IMPORT NEW ROUTER
 
 app = FastAPI(title="Pessoa AI Backend")
 
-# Configure CORS origins from the FRONTEND_URL env var (useful for Render deploys)
-frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
-origins = [frontend_url]
+# Read frontend origin from env (set this on Render / production)
+FRONTEND_URL = os.getenv("FRONTEND_URL")
+
+# Allow local dev origin plus the configured frontend origin when present
+origins = ["http://localhost:5173"]
+if FRONTEND_URL:
+    origins.append(FRONTEND_URL)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -15,6 +23,39 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Middleware to enforce auth on sensitive admin routes and to add security headers
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        # Simple enforcement: admin routes must present an Authorization header.
+        # The actual token validation is handled in your route logic using Supabase.
+        if request.url.path.startswith("/admin"):
+            if not request.headers.get("authorization"):
+                return JSONResponse({"detail": "Missing authorization header"}, status_code=401)
+
+        response = await call_next(request)
+
+        # Add secure response headers
+        response.headers.setdefault("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload")
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "no-referrer-when-downgrade")
+        response.headers.setdefault("Permissions-Policy", "geolocation=(), microphone=()")
+        response.headers.setdefault("X-XSS-Protection", "1; mode=block")
+
+        # Minimal CSP: restrict default sources to self, allow connecting to frontend if configured
+        csp = "default-src 'self'"
+        if FRONTEND_URL:
+            csp = f"{csp}; connect-src 'self' {FRONTEND_URL}"
+        else:
+            csp = f"{csp}; connect-src 'self'"
+        response.headers.setdefault("Content-Security-Policy", csp)
+
+        return response
+
+
+app.add_middleware(SecurityHeadersMiddleware)
 
 # --- Include API Routers ---
 app.include_router(jd_generator.router)

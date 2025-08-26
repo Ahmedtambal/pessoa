@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import MainLayout from '../components/layout/MainLayout';
 import { supabase } from '../lib/supabaseClient';
-import { Upload, Search, Trash2, Download, X, User, Briefcase, Mail, Phone, MapPin, BrainCircuit, BookOpen, FileCheck2, AlertTriangle } from 'lucide-react';
+import { API_ROUTES } from '../lib/api';
+import authFetch from '../lib/authFetch';
+import { Upload, Search, Trash2, Download, X, Briefcase, Mail, Phone, MapPin, BrainCircuit, BookOpen, FileCheck2, AlertTriangle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 // Define the type for our resume object
@@ -22,7 +24,7 @@ interface Resume {
 // THE MAIN PAGE COMPONENT
 const ResumeBankPage: React.FC = () => {
   const [resumes, setResumes] = useState<Resume[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [, setLoading] = useState(true);
   const [selectedResume, setSelectedResume] = useState<Resume | null>(null);
   const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
@@ -58,7 +60,7 @@ const ResumeBankPage: React.FC = () => {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error("Not authenticated");
 
-      await fetch('http://127.0.0.1:8000/resumes/', {
+  await authFetch(API_ROUTES.RESUMES, {
           method: 'DELETE',
           headers: { 
               'Content-Type': 'application/json',
@@ -190,8 +192,91 @@ const ProfileSidebar: React.FC<{resume: Resume, onClose: () => void, onDelete: (
 };
 
 // --- UPLOAD MODAL COMPONENT ---
-const UploadModal: React.FC<{onClose: () => void, onUploadComplete: () => void}> = ({ onClose, onUploadComplete }) => {
-    const [files, setFiles] = useState<File[]>([]); const [uploading, setUploading] = useState(false); const [uploadStatus, setUploadStatus] = useState<{ [key: string]: 'uploading' | 'success' | 'error' }>({}); const [error, setError] = useState<string | null>(null); const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => { if (e.target.files) setFiles(Array.from(e.target.files)); }; const handleUpload = async () => { if (files.length === 0) return; const { data: { session }, error: sessionError } = await supabase.auth.getSession(); if (sessionError || !session) { setError("Authentication error. Please log in again."); return; } setUploading(true); setError(null); let allSuccessful = true; const uploadPromises = files.map(async file => { setUploadStatus(prev => ({ ...prev, [file.name]: 'uploading' })); const formData = new FormData(); formData.append('file', file); try { const response = await fetch('http://127.0.0.1:8000/resumes/upload', { method: 'POST', headers: { 'Authorization': `Bearer ${session.access_token}` }, body: formData, }); if (!response.ok) throw new Error('Upload failed on the server.'); setUploadStatus(prev => ({ ...prev, [file.name]: 'success' })); } catch (error) { allSuccessful = false; setUploadStatus(prev => ({ ...prev, [file.name]: 'error' })); } }); await Promise.all(uploadPromises); setUploading(false); onUploadComplete(); if (allSuccessful) setTimeout(onClose, 1000); }; return ( <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"> <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }} className="glass-card w-full max-w-lg"> <div className="flex justify-between items-center mb-6"> <h2 className="text-2xl font-bold text-white">Upload Resumes</h2> <button onClick={onClose} className="glass-button p-2"><X className="w-4 h-4" /></button> </div> <div className="space-y-4"> <div className="relative border-2 border-dashed border-white/20 rounded-lg p-6 text-center"> <input type="file" multiple onChange={handleFileChange} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" accept=".pdf,.doc,.docx" /> <div className="flex flex-col items-center"> <Upload className="w-12 h-12 text-primary mb-2" /> <p className="text-white">Drag & drop files or <span className="text-primary font-semibold">click to browse</span></p> </div> </div> {files.length > 0 && ( <div className="space-y-2 max-h-40 overflow-y-auto p-1"> {files.map(file => ( <div key={file.name} className="flex items-center justify-between text-sm glass p-2 rounded"> <span className="text-white/80 truncate pr-4">{file.name}</span> <div className="flex-shrink-0"> {uploadStatus[file.name] === 'uploading' && <div className="w-4 h-4 border-2 border-white/30 border-t-primary rounded-full animate-spin" />} {uploadStatus[file.name] === 'success' && <FileCheck2 className="w-4 h-4 text-green-400" />} {uploadStatus[file.name] === 'error' && <AlertTriangle className="w-4 h-4 text-red-400" />} </div> </div> ))} </div> )} {error && <div className="text-red-400 text-sm text-center">{error}</div>} <button className="primary-button w-full" onClick={handleUpload} disabled={uploading || files.length === 0}>{uploading ? 'Processing...' : `Upload ${files.length} File(s)`}</button> </div> </motion.div> </motion.div> );
+const UploadModal: React.FC<{ onClose: () => void; onUploadComplete: () => void }> = ({ onClose, onUploadComplete }) => {
+  const [files, setFiles] = useState<File[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState<{ [key: string]: 'uploading' | 'success' | 'error' }>({});
+  const [error, setError] = useState<string | null>(null);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) setFiles(Array.from(e.target.files));
+  };
+
+  const handleUpload = async () => {
+    if (files.length === 0) return;
+    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+    if (sessionError || !session) {
+      setError("Authentication error. Please log in again.");
+      return;
+    }
+
+    setUploading(true);
+    setError(null);
+    let allSuccessful = true;
+
+    const uploadPromises = files.map(async file => {
+      setUploadStatus(prev => ({ ...prev, [file.name]: 'uploading' }));
+      const formData = new FormData();
+      formData.append('file', file);
+      try {
+        const response = await authFetch(API_ROUTES.RESUME_UPLOAD, {
+          method: 'POST',
+          body: formData,
+        });
+        if (!response.ok) throw new Error('Upload failed on the server.');
+        setUploadStatus(prev => ({ ...prev, [file.name]: 'success' }));
+      } catch (err) {
+        allSuccessful = false;
+        setUploadStatus(prev => ({ ...prev, [file.name]: 'error' }));
+      }
+    });
+
+    await Promise.all(uploadPromises);
+    setUploading(false);
+    onUploadComplete();
+    if (allSuccessful) setTimeout(onClose, 1000);
+  };
+
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+      <motion.div initial={{ scale: 0.9 }} animate={{ scale: 1 }} exit={{ scale: 0.9 }} className="glass-card w-full max-w-lg">
+        <div className="flex justify-between items-center mb-6">
+          <h2 className="text-2xl font-bold text-white">Upload Resumes</h2>
+          <button onClick={onClose} className="glass-button p-2"><X className="w-4 h-4" /></button>
+        </div>
+        <div className="space-y-4">
+          <div className="relative border-2 border-dashed border-white/20 rounded-lg p-6 text-center">
+            <input type="file" multiple onChange={handleFileChange} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" accept=".pdf,.doc,.docx" />
+            <div className="flex flex-col items-center">
+              <Upload className="w-12 h-12 text-primary mb-2" />
+              <p className="text-white">Drag & drop files or <span className="text-primary font-semibold">click to browse</span></p>
+            </div>
+          </div>
+
+          {files.length > 0 && (
+            <div className="space-y-2 max-h-40 overflow-y-auto p-1">
+              {files.map(file => (
+                <div key={file.name} className="flex items-center justify-between text-sm glass p-2 rounded">
+                  <span className="text-white/80 truncate pr-4">{file.name}</span>
+                  <div className="flex-shrink-0">
+                    {uploadStatus[file.name] === 'uploading' && <div className="w-4 h-4 border-2 border-white/30 border-t-primary rounded-full animate-spin" />}
+                    {uploadStatus[file.name] === 'success' && <FileCheck2 className="w-4 h-4 text-green-400" />}
+                    {uploadStatus[file.name] === 'error' && <AlertTriangle className="w-4 h-4 text-red-400" />}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {error && <div className="text-red-400 text-sm text-center">{error}</div>}
+
+          <button className="primary-button w-full" onClick={handleUpload} disabled={uploading || files.length === 0}>
+            {uploading ? 'Processing...' : `Upload ${files.length} File(s)`}
+          </button>
+        </div>
+      </motion.div>
+    </motion.div>
+  );
 };
 
 export default ResumeBankPage;

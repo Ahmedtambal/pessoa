@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, UploadCloud, FileText, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '../lib/supabaseClient';
+import { API_ROUTES } from '../lib/api';
 
 // The main CompareCVsPage component is unchanged.
 const CompareCVsPage: React.FC = () => {
@@ -48,7 +49,7 @@ const CompareCVsPage: React.FC = () => {
       const headers: Record<string, string> = {};
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
-      const response = await fetch('http://127.0.0.1:8000/resumes/compare', {
+  const response = await fetch(API_ROUTES.RESUME_COMPARE, {
         method: 'POST',
         body: formData,
         headers,

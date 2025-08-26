@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { motion } from 'framer-motion';
 import { X, User, Lock, AlertTriangle } from 'lucide-react';
+import { API_ROUTES } from '../lib/api';
+import authFetch from '../lib/authFetch';
 import type { Profile } from '../hooks/useProfile';
 import type { User as SupabaseUser } from '@supabase/supabase-js';
 
@@ -166,12 +168,9 @@ const DangerZone = ({ onClose }: DangerZoneProps) => {
       }
 
       try {
-        const response = await fetch('http://127.0.0.1:8000/admin/profile/delete', {
+        const response = await authFetch(API_ROUTES.ADMIN_PROFILE_DELETE, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${session.access_token}`
-          }
+          headers: { 'Content-Type': 'application/json' }
         });
         
         const result = await response.json();

@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import MainLayout from '../components/layout/MainLayout';
 import CustomSelect from '../components/common/CustomSelect';
+import { API_ROUTES } from '../lib/api';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Copy, Check } from 'lucide-react';
 
@@ -32,9 +33,7 @@ const GenerateJDPage: React.FC = () => {
     setError(null);
 
     try {
-      // --- THIS IS THE FIX for the 404 error ---
-      // The URL now correctly points to /jd/generate
-      const response = await fetch('http://127.0.0.1:8000/jd/generate', {
+  const response = await fetch(API_ROUTES.GENERATE_JD, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

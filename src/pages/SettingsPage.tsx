@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { API_ROUTES } from '../lib/api';
 import MainLayout from '../components/layout/MainLayout';
 import { useProfile } from '../hooks/useProfile';
 import { supabase } from '../lib/supabaseClient';
-import { User, Shield, Send, Trash2, Edit, Check, X } from 'lucide-react';
-import { motion } from 'framer-motion';
+import authFetch from '../lib/authFetch';
+import { Send, Trash2, Edit, Check, X } from 'lucide-react';
 import CustomSelect from '../components/common/CustomSelect';
 import type { Profile } from '../hooks/useProfile';
 
@@ -50,7 +51,7 @@ const SettingsPage: React.FC = () => {
 // --- USER MANAGEMENT COMPONENT ---
 const UserManagement = () => {
     const [users, setUsers] = useState<AppUser[]>([]);
-    const [loading, setLoading] = useState(true);
+    const [, setLoading] = useState(true);
     const { user: currentUser } = useProfile();
 
     const fetchUsers = useCallback(async () => {
@@ -58,7 +59,7 @@ const UserManagement = () => {
         const { data: { session } } = await supabase.auth.getSession();
         if (!session) return;
         try {
-            const response = await fetch('http://127.0.0.1:8000/admin/users', { headers: { 'Authorization': `Bearer ${session.access_token}` } });
+            const response = await authFetch(API_ROUTES.ADMIN_USERS);
             if (response.ok) {
                 const data = await response.json();
                 setUsers(data);
@@ -102,9 +103,9 @@ const UserRow: React.FC<{user: AppUser, currentUserId: string | undefined, refre
     const handleUpdateRole = async () => {
         const { data: { session } } = await supabase.auth.getSession();
         if (!session) return;
-        await fetch(`http://127.0.0.1:8000/admin/users/${user.id}`, {
+    await authFetch(API_ROUTES.ADMIN_UPDATE_USER(user.id), {
             method: 'PUT',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ role: selectedRole })
         });
         setIsEditing(false);
@@ -115,10 +116,7 @@ const UserRow: React.FC<{user: AppUser, currentUserId: string | undefined, refre
         if (!window.confirm(`Are you sure you want to delete the user ${user.email}? This action is permanent.`)) return;
         const { data: { session } } = await supabase.auth.getSession();
         if (!session) return;
-        await fetch(`http://127.0.0.1:8000/admin/users/${user.id}`, {
-            method: 'DELETE',
-            headers: { 'Authorization': `Bearer ${session.access_token}` }
-        });
+    await authFetch(API_ROUTES.ADMIN_DELETE_USER(user.id), { method: 'DELETE' });
         refreshUsers();
     };
 
@@ -168,8 +166,8 @@ const InviteEmployees = () => {
         const { data: { session } } = await supabase.auth.getSession();
         if (!session) return;
         try {
-            const response = await fetch('http://127.0.0.1:8000/admin/invite', {
-                method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+            const response = await authFetch(API_ROUTES.ADMIN_INVITE, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ invites: emailList, role }),
             });
             if (!response.ok) {
@@ -233,9 +231,9 @@ const OrganizationSettings: React.FC<{profile: Profile | null}> = ({ profile }) 
         if (!session) { setLoading(false); return; }
 
         try {
-            const response = await fetch('http://127.0.0.1:8000/admin/organization/delete', {
+            const response = await authFetch(API_ROUTES.ADMIN_DELETE_ORG, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ organization_name: orgName }),
             });
             if (!response.ok) {
