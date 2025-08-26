@@ -11,10 +11,14 @@ app = FastAPI(title="Pessoa AI Backend")
 # Read frontend origin from env (set this on Render / production)
 FRONTEND_URL = os.getenv("FRONTEND_URL")
 
-# Allow local dev origin plus the configured frontend origin when present
+# Allow local dev origin plus the configured frontend origin when present.
+# If FRONTEND_URL isn't set (e.g. local or older deploys), include the known
+# Render frontend origin used in production so the app won't fail CORS silently.
 origins = ["http://localhost:5173"]
 if FRONTEND_URL:
     origins.append(FRONTEND_URL)
+else:
+    origins.append("https://pessoa-frontend.onrender.com")
 
 app.add_middleware(
     CORSMiddleware,
@@ -30,7 +34,12 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         # Simple enforcement: admin routes must present an Authorization header.
         # The actual token validation is handled in your route logic using Supabase.
+        # IMPORTANT: allow OPTIONS preflight requests through without Authorization
+        # so CORS checks can succeed for browser requests.
         if request.url.path.startswith("/admin"):
+            if request.method == "OPTIONS":
+                # let preflight through
+                return await call_next(request)
             if not request.headers.get("authorization"):
                 return JSONResponse({"detail": "Missing authorization header"}, status_code=401)
 
