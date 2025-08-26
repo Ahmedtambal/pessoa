@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Mail, Lock, Eye, EyeOff, User, Building, ArrowRight } from 'lucide-react';
-import { supabase } from '../lib/supabaseClient';
+// ...existing code...
 
 const SignUpPage: React.FC = () => {
   const [formData, setFormData] = useState({
@@ -33,27 +33,32 @@ const SignUpPage: React.FC = () => {
     setError(null);
     setSuccess(null);
 
-    // --- THIS IS THE FIX ---
-    // We now construct the full_name before sending it to Supabase
-    const { data, error } = await supabase.auth.signUp({
-      email: formData.email,
-      password: formData.password,
-      options: {
-        data: {
+    // Call backend /register endpoint which will create the auth user via
+    // the service role, upsert profile and organization atomically.
+    try {
+      const resp = await fetch('/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: formData.email,
+          password: formData.password,
           full_name: `${formData.firstName} ${formData.lastName}`.trim(),
-          organization_name: formData.organizationName,
-        },
-      },
-    });
-    
-    setIsLoading(false);
+          organization_name: formData.organizationName || null,
+        }),
+      });
 
-    if (error) {
-      setError(error.message);
-    } else if (data.user) {
-  // Ensure any session from the signup flow is cleared for security.
-  await supabase.auth.signOut();
-  setSuccess('Success! Please check your email to confirm your account. For security, please sign in after confirming via email.');
+      setIsLoading(false);
+
+      if (!resp.ok) {
+        const err = await resp.json();
+        setError(err.detail || JSON.stringify(err));
+        return;
+      }
+
+      setSuccess('Success! Please check your email to confirm your account. For security, please sign in after confirming via email.');
+    } catch (e: any) {
+      setIsLoading(false);
+      setError(e.message || 'Registration failed');
     }
   };
 

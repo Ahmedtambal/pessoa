@@ -4,7 +4,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 import os
 
-from api.routes import jd_generator, resume_analyzer, admin  # <-- IMPORT NEW ROUTER
+from api.routes import jd_generator, resume_analyzer, admin, auth  # <-- IMPORT NEW AUTH ROUTER
 
 app = FastAPI(title="Pessoa AI Backend")
 
@@ -70,6 +70,7 @@ app.add_middleware(SecurityHeadersMiddleware)
 app.include_router(jd_generator.router)
 app.include_router(resume_analyzer.router)
 app.include_router(admin.router) # <-- ADD THE ADMIN ROUTER
+app.include_router(auth.router)  # Public auth endpoints (register)
 
 # --- Root Endpoint for Health Check ---
 @app.get("/")
