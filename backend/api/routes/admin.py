@@ -287,11 +287,16 @@ async def upsert_my_profile(request: ProfileUpsertRequest, current_user: dict = 
     """
     try:
         user_id = current_user.get('id')
-        payload = { 'id': user_id }
+        payload = {'id': user_id}
         if request.full_name:
             payload['full_name'] = request.full_name
         if request.organization_name:
             payload['organization_name'] = request.organization_name
+
+        # Log the upsert attempt for debugging misassigned organizations
+        print(f"[upsert_my_profile] upserting profile for user_id={user_id} with payload={payload}")
+
+        # Perform the profile upsert
         response = supabase.table('profiles').upsert(payload).execute()
         if getattr(response, 'error', None):
             raise HTTPException(status_code=500, detail=str(response.error))
@@ -302,16 +307,14 @@ async def upsert_my_profile(request: ProfileUpsertRequest, current_user: dict = 
         # not exist on this Supabase instance, catch and ignore the error.
         if request.organization_name:
             try:
-                # Upsert by name; other org metadata can be added later.
                 org_resp = supabase.table('organizations').upsert({'name': request.organization_name}).execute()
                 if getattr(org_resp, 'error', None):
-                    # If the table exists but upsert failed for another reason, log it.
                     print('[upsert_my_profile] organizations.upsert error:', org_resp.error)
             except Exception as e:
-                # Common case: organizations table not present on some setups — ignore.
                 print('[upsert_my_profile] could not upsert organizations row (table may be missing):', e)
 
-        return { 'message': 'Profile upserted', 'data': response.data }
+        return {'message': 'Profile upserted', 'data': response.data}
+
     except HTTPException:
         raise
     except Exception as e:

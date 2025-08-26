@@ -18,7 +18,15 @@ const InviteSignUpPage: React.FC = () => {
   // We now use a more direct and reliable method to get the invited user's data.
   useEffect(() => {
     const processInvite = async () => {
-      // supabase.auth.getUser() automatically processes the invite token from the URL.
+      // Ensure no other session is present (e.g. an admin logged in on the same browser)
+      // so that the invite token in the URL is processed for the invited user.
+      try {
+        await supabase.auth.signOut();
+      } catch (e) {
+        console.warn('Failed to sign out before processing invite:', e);
+      }
+
+      // supabase.auth.getUser() will process the invite token from the URL and return the invited user.
       const { data, error } = await supabase.auth.getUser();
       
       if (error || !data?.user) {
