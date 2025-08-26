@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { motion } from 'framer-motion';
 import { X, User, Lock, AlertTriangle } from 'lucide-react';
@@ -12,17 +12,14 @@ interface ProfilePageProps {
   onClose: () => void;
   onProfileUpdate: () => void;
 }
-
 interface ProfileSettingsProps {
     user: SupabaseUser;
     profile: Profile;
     onUpdate: () => void;
 }
-
 interface DangerZoneProps {
     onClose: () => void;
 }
-
 
 // --- Main Modal Component ---
 const ProfilePage = ({ user, profile, onClose, onProfileUpdate }: ProfilePageProps) => {
@@ -41,10 +38,12 @@ const ProfilePage = ({ user, profile, onClose, onProfileUpdate }: ProfilePagePro
         animate={{ scale: 1, y: 0 }} 
         exit={{ scale: 0.95, y: 20 }} 
         transition={{ duration: 0.2 }}
-        className="glass-card w-full max-w-4xl h-[700px] relative flex overflow-hidden"
+        className="glass-card w-full max-w-4xl h-auto max-h-[90vh] md:h-auto md:max-h-[700px] relative flex flex-col md:flex-row overflow-hidden"
       >
         <button onClick={onClose} className="absolute top-4 right-4 glass-button p-2 z-10"><X className="w-4 h-4" /></button>
-        <div className="w-1/3 border-r border-white/10 p-6 flex flex-col">
+        
+        {/* --- Left Column: Navigation Tabs --- */}
+        <div className="w-full md:w-1/3 border-b md:border-b-0 md:border-r border-white/10 p-6 flex-shrink-0">
           <h2 className="text-xl font-bold text-white mb-8">Account Settings</h2>
           <div className="space-y-2">
             {tabs.map(tab => (
@@ -58,7 +57,9 @@ const ProfilePage = ({ user, profile, onClose, onProfileUpdate }: ProfilePagePro
             ))}
           </div>
         </div>
-        <div className="w-2/3 p-8 overflow-y-auto">
+
+        {/* --- Right Column: Content --- */}
+        <div className="w-full md:w-2/3 p-8 overflow-y-auto">
           {activeTab === 'profile' && <ProfileSettings profile={profile} user={user} onUpdate={onProfileUpdate} />}
           {activeTab === 'security' && <PasswordSettings />}
           {activeTab === 'danger' && <DangerZone onClose={onClose} />}
@@ -150,33 +151,43 @@ const PasswordSettings = () => {
   );
 };
 
-// --- Sub-component for Danger Zone ---
+// --- Sub-component for Danger Zone (NOW FULLY FUNCTIONAL) ---
 const DangerZone = ({ onClose }: DangerZoneProps) => {
   const [deleteConfirm, setDeleteConfirm] = useState('');
   const [loading, setLoading] = useState(false);
   
   const handleDelete = async () => {
       setLoading(true);
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        alert("Authentication error. Please log in again.");
+        setLoading(false);
+        return;
+      }
+
       try {
-        // Call backend to delete this account
-        const { data: sessionData } = await supabase.auth.getSession();
-        const token = sessionData?.session?.access_token || '';
-        const resp = await fetch('http://127.0.0.1:8000/admin/account/delete', {
+        const response = await fetch('http://127.0.0.1:8000/admin/profile/delete', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.access_token}`
+          }
         });
-        if (!resp.ok) {
-          const json = await resp.json().catch(() => ({}));
-          alert('Failed to delete account: ' + (json?.detail || resp.statusText));
-        } else {
-          await supabase.auth.signOut();
-          onClose();
-          window.location.href = '/login';
+        
+        const result = await response.json();
+        if (!response.ok) {
+          throw new Error(result.detail || "Failed to delete account.");
         }
-      } catch (e) {
-        alert('An error occurred while deleting account: ' + String(e));
+        
+        alert(result.message || "Account deletion successful. You will now be logged out.");
+        await supabase.auth.signOut();
+        window.location.href = '/login';
+
+      } catch (error: any) {
+        alert(`An error occurred: ${error.message}`);
       } finally {
         setLoading(false);
+        onClose();
       }
   };
 
@@ -185,7 +196,7 @@ const DangerZone = ({ onClose }: DangerZoneProps) => {
           <h3 className="text-2xl font-bold text-red-400">Danger Zone</h3>
           <div className="border-t border-red-500/30 pt-6">
               <h4 className="text-xl font-semibold text-white">Delete My Account</h4>
-              <p className="text-white/60 text-sm mt-2 mb-4">This action is irreversible. All your data will be permanently deleted.</p>
+              <p className="text-white/60 text-sm mt-2 mb-4">This action is irreversible. If you are the last admin, this will also delete the entire organization and all its data.</p>
               <div>
                   <label className="text-sm font-medium text-white/70 block mb-2">To confirm, type "delete" below:</label>
                   <input value={deleteConfirm} onChange={(e) => setDeleteConfirm(e.target.value)} type="text" className="glass-input w-full border-red-500/30" />
@@ -197,6 +208,5 @@ const DangerZone = ({ onClose }: DangerZoneProps) => {
       </div>
   );
 };
-
 
 export default ProfilePage;
