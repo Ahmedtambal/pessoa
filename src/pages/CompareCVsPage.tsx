@@ -148,23 +148,30 @@ const AnalysisResultBox = ({ markdownText }: { markdownText: string }) => {
   return (
     <div className="mt-8 pt-6 border-t border-white/10 animate-fade-in">
       <div className="result-card space-y-8">
-        {parsedContent.map((section, index) => {
-          const normalizedTitle = section.title.trim().toLowerCase();
-          const isFinal = normalizedTitle.includes('final recommendation');
-          return (
-            <div key={index}>
-              <h2 className="text-2xl font-bold text-white mb-4">{section.title}</h2>
-              {isFinal ? (
-                // Normalize markdown emphasis and ensure consistent paragraph styling
-                <p className="text-white/80 leading-relaxed">
-                  {section.content.replace(/(\*\*|__|\*|_)/g, '').trim()}
-                </p>
-              ) : (
-                <RenderMarkdownTable tableString={section.content} />
-              )}
-            </div>
-          );
-        })}
+        {parsedContent.length === 0 ? (
+          // Fallback: if the AI output didn't contain '##' headings or our parser
+          // couldn't split it, show the raw text in a preformatted block to
+          // preserve tables, pipes and newlines so design doesn't break.
+          <pre className="whitespace-pre-wrap font-mono text-sm text-white/80 bg-white/5 p-4 rounded">{markdownText}</pre>
+        ) : (
+          parsedContent.map((section, index) => {
+            const normalizedTitle = section.title.trim().toLowerCase();
+            const isFinal = normalizedTitle.includes('final recommendation');
+            return (
+              <div key={index}>
+                <h2 className="text-2xl font-bold text-white mb-4">{section.title}</h2>
+                {isFinal ? (
+                  // Normalize markdown emphasis and ensure consistent paragraph styling
+                  <p className="text-white/80 leading-relaxed">
+                    {section.content.replace(/(\*\*|__|\*|_)/g, '').trim()}
+                  </p>
+                ) : (
+                  <RenderMarkdownTable tableString={section.content} />
+                )}
+              </div>
+            );
+          })
+        )}
       </div>
     </div>
   );
