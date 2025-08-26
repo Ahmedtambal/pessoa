@@ -51,7 +51,9 @@ const SignUpPage: React.FC = () => {
     if (error) {
       setError(error.message);
     } else if (data.user) {
-      setSuccess('Success! Please check your email to confirm your account.');
+  // Ensure any session from the signup flow is cleared for security.
+  await supabase.auth.signOut();
+  setSuccess('Success! Please check your email to confirm your account. For security, please sign in after confirming via email.');
     }
   };
 

@@ -296,6 +296,21 @@ async def upsert_my_profile(request: ProfileUpsertRequest, current_user: dict = 
         if getattr(response, 'error', None):
             raise HTTPException(status_code=500, detail=str(response.error))
 
+        # If the caller provided an organization_name, ensure the organizations
+        # table contains a row for it. This keeps explicit org records in sync
+        # with profiles that reference them. If the organizations table does
+        # not exist on this Supabase instance, catch and ignore the error.
+        if request.organization_name:
+            try:
+                # Upsert by name; other org metadata can be added later.
+                org_resp = supabase.table('organizations').upsert({'name': request.organization_name}).execute()
+                if getattr(org_resp, 'error', None):
+                    # If the table exists but upsert failed for another reason, log it.
+                    print('[upsert_my_profile] organizations.upsert error:', org_resp.error)
+            except Exception as e:
+                # Common case: organizations table not present on some setups — ignore.
+                print('[upsert_my_profile] could not upsert organizations row (table may be missing):', e)
+
         return { 'message': 'Profile upserted', 'data': response.data }
     except HTTPException:
         raise

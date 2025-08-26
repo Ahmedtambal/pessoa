@@ -76,16 +76,18 @@ const InviteSignUpPage: React.FC = () => {
         }
 
         const userId = fresh?.user?.id || data.user.id;
-        const invitedOrg = fresh?.user?.user_metadata?.organization_name || null;
-        const metadataName = fresh?.user?.user_metadata?.full_name || null;
+  const invitedOrg = fresh?.user?.user_metadata?.organization_name || null;
+  const metadataName = fresh?.user?.user_metadata?.full_name || null;
 
-        // Determine a non-empty full name to save: prefer form input, then metadata.
-        const nameToSave = formData.fullName.trim() || metadataName || null;
+  // Determine a non-empty full name to save: prefer form input, then metadata.
+  const nameToSave = formData.fullName.trim() || metadataName || null;
 
-        // Upsert into profiles table: id == auth user id
-        const profilePayload: any = { id: userId };
-        if (nameToSave) profilePayload.full_name = nameToSave;
-        if (invitedOrg) profilePayload.organization_name = invitedOrg;
+  // Upsert into profiles table: id == auth user id
+  // IMPORTANT: only set organization_name from invite metadata (invitedOrg). Do NOT use any other source
+  // to assign organizations during invite acceptance — this prevents users being added to the wrong org.
+  const profilePayload: any = { id: userId };
+  if (nameToSave) profilePayload.full_name = nameToSave;
+  if (invitedOrg) profilePayload.organization_name = invitedOrg;
 
         // Call backend endpoint that uses the service-role client to upsert the profile.
         try {
@@ -104,9 +106,10 @@ const InviteSignUpPage: React.FC = () => {
         console.warn('Failed to upsert profile after invite signup:', e);
       }
 
-      setSuccess('Account created! You will be redirected to the login page to sign in.');
-      await supabase.auth.signOut(); // Ensure clean session before redirect
-      setTimeout(() => navigate('/login'), 4000);
+  setSuccess('Account created! You will be redirected to the login page to sign in.');
+  // Ensure any session created during invite processing is cleared for security
+  await supabase.auth.signOut();
+  setTimeout(() => navigate('/login'), 4000);
     }
   };
 
