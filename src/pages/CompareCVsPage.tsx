@@ -149,10 +149,43 @@ const AnalysisResultBox = ({ markdownText }: { markdownText: string }) => {
     <div className="mt-8 pt-6 border-t border-white/10 animate-fade-in">
       <div className="result-card space-y-8">
         {parsedContent.length === 0 ? (
-          // Fallback: if the AI output didn't contain '##' headings or our parser
-          // couldn't split it, show the raw text in a preformatted block to
-          // preserve tables, pipes and newlines so design doesn't break.
-          <pre className="whitespace-pre-wrap font-mono text-sm text-white/80 bg-white/5 p-4 rounded">{markdownText}</pre>
+          // Heuristic fallback: try to produce a tidy, user-friendly layout
+          // even when the AI output doesn't include '##' headings.
+          // - Extract a FINAL RECOMMENDATION block if present
+          // - Split remaining text into blocks separated by blank lines
+          // - Render blocks containing pipes '|' as tables, otherwise as paragraphs
+          (() => {
+            const finalMatchIndex = markdownText.search(/FINAL RECOMMENDATION\b/i);
+            let mainText = markdownText;
+            let finalText = '';
+            if (finalMatchIndex !== -1) {
+              mainText = markdownText.slice(0, finalMatchIndex).trim();
+              finalText = markdownText.slice(finalMatchIndex).trim();
+            }
+
+            const blocks = mainText.split(/\n{2,}/).map(b => b.trim()).filter(Boolean);
+
+            return (
+              <div className="space-y-6">
+                {blocks.map((block, i) => (
+                  <div key={i}>
+                    {block.includes('|') ? (
+                      <RenderMarkdownTable tableString={block} />
+                    ) : (
+                      <p className="text-white/80 leading-relaxed">{block}</p>
+                    )}
+                  </div>
+                ))}
+
+                {finalText ? (
+                  <div>
+                    <h2 className="text-2xl font-bold text-white mb-4">FINAL RECOMMENDATION</h2>
+                    <p className="text-white/80 leading-relaxed">{finalText.replace(/FINAL RECOMMENDATION[:\-\s]*/i, '').trim()}</p>
+                  </div>
+                ) : null}
+              </div>
+            );
+          })()
         ) : (
           parsedContent.map((section, index) => {
             const normalizedTitle = section.title.trim().toLowerCase();
