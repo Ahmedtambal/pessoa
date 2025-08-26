@@ -52,15 +52,23 @@ Now, generate the job description based on the user's data below.
         - Requirements: {request.requirements}
         - Skills: {request.skills}
         """
-        
-        completion = self.client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": self.system_prompt},
-                {"role": "user", "content": user_input}
-            ]
-        )
+        try:
+            completion = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": self.system_prompt},
+                    {"role": "user", "content": user_input}
+                ]
+            )
+        except Exception as e:
+            print('[jd_service] OpenAI generate_jd error:', repr(e))
+            raise Exception('AI job description generation failed: ' + str(e))
+
         # Ensure content is not None before returning
-        return completion.choices[0].message.content or ""
+        try:
+            return completion.choices[0].message.content or ""
+        except Exception as e:
+            print('[jd_service] error reading AI response:', repr(e))
+            raise Exception('AI returned unexpected response for job description')
 
 jd_service = JDService()

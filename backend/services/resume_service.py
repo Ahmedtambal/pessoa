@@ -76,18 +76,26 @@ Now, perform the full analysis on the following Job Description and Candidate CV
         raw_text = extract_text_from_file(file)
         if not raw_text:
             return {}
-
-        completion = self.client.chat.completions.create(
-            model="gpt-4o-mini",
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": self.profile_extraction_prompt},
-                {"role": "user", "content": raw_text},
-            ],
-        )
+        try:
+            completion = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                response_format={"type": "json_object"},
+                messages=[
+                    {"role": "system", "content": self.profile_extraction_prompt},
+                    {"role": "user", "content": raw_text},
+                ],
+            )
+        except Exception as e:
+            # Log the error and raise a clear exception so the API returns a 500 quickly
+            print('[resume_service] profile extraction OpenAI error:', repr(e))
+            raise Exception('AI profile extraction failed: ' + str(e))
 
         response_content = completion.choices[0].message.content or "{}"
-        extracted_data = json.loads(response_content)
+        try:
+            extracted_data = json.loads(response_content)
+        except Exception as e:
+            print('[resume_service] JSON parse error from AI response:', repr(e), 'raw:', response_content)
+            raise Exception('AI returned invalid JSON for profile extraction')
         extracted_data["full_extracted_text"] = raw_text
         return extracted_data
 
@@ -109,7 +117,11 @@ Now, perform the full analysis on the following Job Description and Candidate CV
                 {"role": "user", "content": user_prompt},
             ],
         )
-        return completion.choices[0].message.content or "Error: Could not generate comparison."
+        try:
+            return completion.choices[0].message.content or "Error: Could not generate comparison."
+        except Exception as e:
+            print('[resume_service] error reading AI comparison response:', repr(e))
+            raise Exception('AI comparison failed: ' + str(e))
 
 
 resume_service = ResumeService()
