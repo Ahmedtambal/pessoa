@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Mail, Lock, Eye, EyeOff, User, Building, ArrowRight } from 'lucide-react';
+import { API_ROUTES } from '../lib/api';
 // ...existing code...
 
 const SignUpPage: React.FC = () => {
@@ -36,7 +37,7 @@ const SignUpPage: React.FC = () => {
     // Call backend /register endpoint which will create the auth user via
     // the service role, upsert profile and organization atomically.
     try {
-      const resp = await fetch('/register', {
+      const resp = await fetch(API_ROUTES.REGISTER, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -50,11 +51,20 @@ const SignUpPage: React.FC = () => {
       setIsLoading(false);
 
       if (!resp.ok) {
-        const err = await resp.json();
-        setError(err.detail || JSON.stringify(err));
+        // Try to parse JSON error, fall back to text
+        let errBody: any = null;
+        try {
+          errBody = await resp.json();
+        } catch (parseErr) {
+          errBody = await resp.text();
+        }
+        console.error('Register failed', resp.status, errBody);
+        const message = (errBody && (errBody.detail || errBody.message)) || String(errBody) || `Request failed (${resp.status})`;
+        setError(message);
         return;
       }
 
+      console.log('Register response OK');
       setSuccess('Success! Please check your email to confirm your account. For security, please sign in after confirming via email.');
     } catch (e: any) {
       setIsLoading(false);

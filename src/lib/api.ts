@@ -15,4 +15,5 @@ export const API_ROUTES = {
   RESUMES: `${BASE_URL}/resumes/`,
 
   GENERATE_JD: `${BASE_URL}/jd/generate`,
+  REGISTER: `${BASE_URL}/register`,
 };

@@ -37,7 +37,6 @@ def register_user(req: RegisterRequest):
         'email': req.email,
         'password': req.password,
         # do not auto-confirm; email confirmation should be done by user
-        'email_confirm': False,
         'user_metadata': {}
     }
     if req.full_name:
