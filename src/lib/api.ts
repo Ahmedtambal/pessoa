@@ -4,6 +4,14 @@
 const runtimeFallback = (typeof window !== 'undefined' && window.location && window.location.origin) ? window.location.origin : 'http://127.0.0.1:8000';
 const BASE_URL = import.meta.env.VITE_BACKEND_URL || runtimeFallback;
 
+// Debug: print the resolved backend URL at runtime to help diagnose deployments
+// where the frontend may still call localhost. Remove this log after debugging.
+if (typeof window !== 'undefined' && window?.console) {
+  // use warn so it's visible in most consoles
+  // eslint-disable-next-line no-console
+  console.warn('[pessoa] API BASE_URL ->', BASE_URL);
+}
+
 export const API_ROUTES = {
   ADMIN_USERS: `${BASE_URL}/admin/users`,
   ADMIN_INVITE: `${BASE_URL}/admin/invite`,
