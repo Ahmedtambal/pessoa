@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, UploadCloud, FileText, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '../lib/supabaseClient';
+import { API_ROUTES } from '../lib/api';
 
 // Main CompareCVsPage component
 const CompareCVsPage: React.FC = () => {
@@ -18,7 +19,7 @@ const CompareCVsPage: React.FC = () => {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     // We add a check to ensure e.target.files is not null before proceeding.
     if (e.target.files) {
-      setCvFiles(prev => [...prev, ...Array.from(e.target.files)]);
+      setCvFiles(prev => [...prev, ...Array.from(e.target.files || [])]);
     }
   };
   
@@ -46,7 +47,7 @@ const CompareCVsPage: React.FC = () => {
       const headers: Record<string, string> = {};
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
-      const response = await fetch('http://127.0.0.1:8000/resumes/compare', {
+      const response = await fetch(API_ROUTES.RESUME_COMPARE, {
         method: 'POST', body: formData, headers,
       });
 
