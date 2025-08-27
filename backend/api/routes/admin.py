@@ -10,6 +10,11 @@ from typing import List
 
 from config.settings import settings
 from .resume_analyzer import get_current_user, get_supabase_client
+from time import time
+
+# Small in-memory cache to reduce repeated DB role lookups when the settings page polls
+_ADMIN_ROLE_CACHE: dict = {}
+_ADMIN_ROLE_CACHE_TTL = 3  # seconds
 
 # --- Pydantic Models ---
 class UserUpdate(BaseModel):
@@ -54,8 +59,19 @@ def admin_delete_auth_user(user_id: str):
 # --- Admin-Only Dependency ---
 async def is_admin_user(current_user: dict = Depends(get_current_user), supabase: Client = Depends(get_supabase_admin_client)):
     user_id = current_user.get('id')
-    response = supabase.table('profiles').select('role').eq('id', user_id).single().execute()
-    if not response.data or response.data.get('role') != 'ADMIN':
+    # Check the in-memory cache first to avoid hammering PostgREST when the UI retries rapidly.
+    now = time()
+    cache_entry = _ADMIN_ROLE_CACHE.get(user_id)
+    if cache_entry and cache_entry[1] > now:
+        role = cache_entry[0]
+    else:
+        response = supabase.table('profiles').select('role').eq('id', user_id).single().execute()
+        if getattr(response, 'error', None):
+            raise HTTPException(status_code=500, detail=str(response.error))
+        role = response.data.get('role') if response and response.data else None
+        _ADMIN_ROLE_CACHE[user_id] = (role, now + _ADMIN_ROLE_CACHE_TTL)
+
+    if role != 'ADMIN':
         raise HTTPException(status_code=403, detail="Forbidden: Not an admin")
     return current_user
 
@@ -250,7 +266,8 @@ async def delete_organization(request: DeleteOrgRequest, supabase: Client = Depe
         # fall back to a best-effort server-side cleanup: delete profiles and auth users.
         msg = str(e)
         print(f"[delete_organization] RPC failed: {msg}")
-        if 'admin_delete_user' in msg or 'function auth.admin_delete_user' in msg or '42883' in msg:
+        # Some Supabase instances may not have the same helper functions/tables; attempt a best-effort cleanup
+        if 'admin_delete_user' in msg or 'function auth.admin_delete_user' in msg or '42883' in msg or 'column "user_id" does not exist' in msg:
             try:
                 # Fetch all user ids in the organization
                 profiles_resp = supabase.table('profiles').select('id').eq('organization_name', request.organization_name).execute()
@@ -287,7 +304,12 @@ async def delete_organization(request: DeleteOrgRequest, supabase: Client = Depe
                 result = {"message": f"Fallback cleanup completed for organization '{request.organization_name}'."}
                 if failed_auth_deletes:
                     result['failed_auth_deletes'] = failed_auth_deletes
-                return result
+                # Ensure CORS so the browser receives Access-Control-Allow-Origin even after an error path
+                frontend = os.getenv('FRONTEND_URL') or 'https://pessoa-frontend.onrender.com'
+                return JSONResponse(status_code=200, content=result, headers={
+                    'Access-Control-Allow-Origin': frontend,
+                    'Access-Control-Allow-Credentials': 'true'
+                })
             except Exception as ex2:
                 print(f"[delete_organization] fallback failed: {ex2}")
                 raise HTTPException(status_code=500, detail=str(ex2))

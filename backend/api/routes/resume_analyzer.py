@@ -5,6 +5,12 @@ from supabase import create_client, Client
 from pydantic import BaseModel
 from config.settings import settings
 from services.resume_service import resume_service
+from time import time
+
+# Simple in-memory TTL cache for token -> user lookups to avoid repeat network calls
+# Keyed by raw JWT; small TTL reduces latency for rapid UI requests (e.g. settings page)
+_USER_CACHE: dict = {}
+_USER_CACHE_TTL = 5  # seconds
 
 # --- Pydantic model for the delete request body ---
 class DeleteRequest(BaseModel):
@@ -28,11 +34,23 @@ async def get_current_user(
     Raises a 401 Unauthorized error if the token is invalid or expired.
     """
     try:
+        # TTL cache check
+        cache_entry = _USER_CACHE.get(token.credentials)
+        now = time()
+        if cache_entry and cache_entry[1] > now:
+            return cache_entry[0]
+
         user_response = supabase.auth.get_user(jwt=token.credentials)
         user = user_response.user
         if not user:
-             raise HTTPException(status_code=401, detail="User not found or token is invalid")
-        return user.dict()
+            raise HTTPException(status_code=401, detail="User not found or token is invalid")
+
+        user_dict = user.dict()
+        # store in cache
+        _USER_CACHE[token.credentials] = (user_dict, now + _USER_CACHE_TTL)
+        return user_dict
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=401, detail=f"Could not validate credentials: {e}")
 
