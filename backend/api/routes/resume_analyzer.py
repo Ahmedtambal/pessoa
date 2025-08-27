@@ -172,9 +172,22 @@ async def get_all_resumes(
     current_user: dict = Depends(get_current_user)
 ):
     user_id = current_user.get('id')
-    # This now securely fetches ONLY the resumes belonging to the logged-in user.
-    response = supabase.table('resumes').select("*").eq('user_id', user_id).order('uploaded_at', desc=True).execute()
-    return response.data
+    # Try to fetch resumes owned by the user's profile_id first, then fallback to user_id
+    try:
+        response = supabase.table('resumes').select("*").eq('profile_id', user_id).order('uploaded_at', desc=True).execute()
+        if getattr(response, 'error', None):
+            raise Exception(response.error)
+
+        # If no rows found, try the older user_id column for backwards compatibility
+        if not response.data:
+            response = supabase.table('resumes').select("*").eq('user_id', user_id).order('uploaded_at', desc=True).execute()
+            if getattr(response, 'error', None):
+                raise Exception(response.error)
+
+        return response.data
+    except Exception as e:
+        print(f"[get_all_resumes] error fetching resumes for user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/")
@@ -205,9 +218,28 @@ async def delete_resumes(
     user_id = current_user.get('id')
 
     # Ensure we only delete resumes owned by the current user. IDs are strings (UUIDs) in DB.
-    response = supabase.table('resumes').delete().in_('id', ids_to_delete).eq('profile_id', user_id).execute()
+    deleted_ids = []
 
-    if getattr(response, 'error', None):
-        raise HTTPException(status_code=500, detail=str(response.error))
+    # First attempt delete by profile_id
+    try:
+        resp1 = supabase.table('resumes').delete().in_('id', ids_to_delete).eq('profile_id', user_id).execute()
+        if getattr(resp1, 'error', None):
+            print(f"[delete_resumes] error deleting by profile_id: {resp1.error}")
+        else:
+            deleted_ids.extend([r.get('id') for r in (resp1.data or []) if r.get('id')])
+    except Exception as e:
+        print(f"[delete_resumes] exception deleting by profile_id: {e}")
 
-    return response.data
+    # Delete any remaining ids using user_id (legacy column)
+    remaining = [i for i in ids_to_delete if i not in deleted_ids]
+    if remaining:
+        try:
+            resp2 = supabase.table('resumes').delete().in_('id', remaining).eq('user_id', user_id).execute()
+            if getattr(resp2, 'error', None):
+                print(f"[delete_resumes] error deleting by user_id: {resp2.error}")
+            else:
+                deleted_ids.extend([r.get('id') for r in (resp2.data or []) if r.get('id')])
+        except Exception as e:
+            print(f"[delete_resumes] exception deleting by user_id: {e}")
+
+    return {"deleted_ids": deleted_ids}

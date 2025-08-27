@@ -1,6 +1,6 @@
 import json
 from openai import OpenAI
-from fastapi import UploadFile
+from fastapi import UploadFile, HTTPException
 from typing import List
 from api.models import ResumeAnalysisRequest
 from config.settings import settings
@@ -61,9 +61,21 @@ You are an expert Senior Technical Recruiter. Your task is to analyse a Job Desc
 Now, perform the full analysis on the following Job Description and Candidate CVs.
 """
 
-    def extract_profile_from_cv(self, file: UploadFile) -> dict:
-        raw_text = extract_text_from_file(file)
-        if not raw_text: return {}
+    def extract_profile_from_cv(self, file: UploadFile | None = None, raw_text: str | None = None) -> dict:
+        """Extract structured profile fields from CV text.
+
+        Accept either an UploadFile or pre-extracted raw_text. Returning a dict with
+        keys like 'name', 'email', etc. If extraction fails, this returns an empty dict
+        or raises an HTTPException on AI errors.
+        """
+        if raw_text is None:
+            if file is None:
+                return {}
+            raw_text = extract_text_from_file(file)
+
+        if not raw_text:
+            return {}
+
         try:
             completion = self.client.chat.completions.create(
                 model="gpt-4o-mini",
@@ -82,11 +94,21 @@ Now, perform the full analysis on the following Job Description and Candidate CV
             raise HTTPException(status_code=500, detail="AI profile extraction failed.")
 
     def compare_cvs_to_jd(self, jd: str, cv_files: List[UploadFile]) -> str:
-        cv_texts = {}
+        cv_texts = []
         for cv_file in cv_files:
-            if cv_file.filename:
-                cv_texts[cv_file.filename] = extract_text_from_file(cv_file)
-        cv_data_str = "\n".join([f"### CV: {name}\n---\n{text}\n---\n" for name, text in cv_texts.items()])
+            filename = cv_file.filename or "unknown"
+            raw_text = extract_text_from_file(cv_file)
+            # Attempt to extract applicant name from CV text. This uses the same
+            # AI extractor but provided with raw_text so we don't re-read the file.
+            profile = self.extract_profile_from_cv(raw_text=raw_text)
+            name = None
+            if isinstance(profile, dict):
+                name = profile.get('name') or profile.get('full_name')
+            if not name:
+                name = filename
+            cv_texts.append((name, raw_text))
+
+        cv_data_str = "\n".join([f"### CV: {name}\n---\n{text}\n---\n" for name, text in cv_texts])
         user_prompt = f"## Job Description:\n{jd}\n\n## Candidate CVs:\n{cv_data_str}"
         try:
             completion = self.client.chat.completions.create(
