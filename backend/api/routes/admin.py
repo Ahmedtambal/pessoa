@@ -92,7 +92,18 @@ async def list_users(supabase: Client = Depends(get_supabase_admin_client)):
             fallback = supabase.table('profiles').select('id, full_name, email, organization_name, role').execute()
             if getattr(fallback, 'error', None):
                 raise Exception(fallback.error)
-            return fallback.data
+            # Normalize to a list of dicts the frontend expects
+            data = fallback.data or []
+            normalized = []
+            for row in data:
+                normalized.append({
+                    'id': row.get('id'),
+                    'full_name': row.get('full_name'),
+                    'email': row.get('email'),
+                    'organization_name': row.get('organization_name'),
+                    'role': row.get('role'),
+                })
+            return normalized
         except Exception as e2:
             print('[list_users] fallback profiles error:', e2)
             return JSONResponse(

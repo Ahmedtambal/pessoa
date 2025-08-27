@@ -110,10 +110,53 @@ async def upload_and_process_resume(
             "full_extracted_text": profile_data.get('full_extracted_text'),
         }
         
-        response = supabase.table('resumes').insert(db_record).execute()
-        
-        if not response.data:
-             raise HTTPException(status_code=500, detail="Failed to save resume metadata to the database.")
+        # Try inserting the record. If the database schema is missing optional
+        # columns (common when different deployments have drifted), PostgREST
+        # will return an error like PGRST204 or a message mentioning the column.
+        # Detect that and retry the insert after removing the missing keys so
+        # uploads succeed even on leaner schemas.
+        def _attempt_insert(record):
+            resp = supabase.table('resumes').insert(record).execute()
+            return resp
+
+        response = None
+        remaining_record = dict(db_record)
+        max_retries = len(remaining_record)
+        import re
+
+        for _ in range(max_retries + 1):
+            try:
+                response = _attempt_insert(remaining_record)
+                if getattr(response, 'error', None):
+                    # Some PostgREST errors are objects; stringify for inspection
+                    err_msg = str(response.error)
+                    raise Exception(err_msg)
+
+                # success
+                break
+            except Exception as insert_err:
+                err_text = str(insert_err)
+                print(f"[upload_and_process_resume] insert error: {err_text}")
+                # Look for common indications of missing columns
+                # e.g. "Could not find the 'education_summary' column of 'resumes' in the schema cache"
+                m = re.search(r"Could not find the '([a-zA-Z0-9_]+)' column", err_text)
+                if not m:
+                    # alternate pattern: column "user_id" does not exist
+                    m = re.search(r'column "([a-zA-Z0-9_]+)" does not exist', err_text)
+
+                if m:
+                    col = m.group(1)
+                    if col in remaining_record:
+                        print(f"[upload_and_process_resume] removing missing column '{col}' and retrying")
+                        remaining_record.pop(col, None)
+                        continue
+
+                # If we couldn't parse a missing-column error, or no recoverable keys remain,
+                # surface a clear error to the client.
+                raise HTTPException(status_code=500, detail=f"Failed to save resume metadata: {err_text}")
+
+        if not response or not getattr(response, 'data', None):
+            raise HTTPException(status_code=500, detail="Failed to save resume metadata to the database.")
 
         return response.data[0]
 
