@@ -1,4 +1,6 @@
 from fastapi import APIRouter, HTTPException, Depends
+from fastapi.responses import JSONResponse
+import os
 import requests
 from supabase import create_client, Client
 # --- THIS IS A KEY PART OF THE FIX ---
@@ -57,11 +59,34 @@ async def is_admin_user(current_user: dict = Depends(get_current_user), supabase
         raise HTTPException(status_code=403, detail="Forbidden: Not an admin")
     return current_user
 
-# --- API Endpoints ---
+
 @router.get("/users", dependencies=[Depends(is_admin_user)])
 async def list_users(supabase: Client = Depends(get_supabase_admin_client)):
-    response = supabase.rpc('get_users_with_profiles').execute()
-    return response.data
+    try:
+        response = supabase.rpc('get_users_with_profiles').execute()
+        if getattr(response, 'error', None):
+            raise Exception(response.error)
+        return response.data
+    except Exception as e:
+        frontend = os.getenv('FRONTEND_URL') or 'https://pessoa-frontend.onrender.com'
+        print('[list_users] rpc error:', e)
+        # Fallback: attempt to read from the profiles table directly so the UI
+        # can still show users when the DB RPC is missing or incompatible.
+        try:
+            fallback = supabase.table('profiles').select('id, full_name, email, organization_name, role').execute()
+            if getattr(fallback, 'error', None):
+                raise Exception(fallback.error)
+            return fallback.data
+        except Exception as e2:
+            print('[list_users] fallback profiles error:', e2)
+            return JSONResponse(
+                status_code=500,
+                content={"detail": "Failed to list users", "error": str(e2)},
+                headers={
+                    'Access-Control-Allow-Origin': frontend,
+                    'Access-Control-Allow-Credentials': 'true'
+                },
+            )
 
 @router.put("/users/{user_id}", dependencies=[Depends(is_admin_user)])
 async def update_user_role(user_id: str, update: UserUpdate, supabase: Client = Depends(get_supabase_admin_client)):

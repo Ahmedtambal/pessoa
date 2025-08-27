@@ -41,7 +41,12 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
                 # let preflight through
                 return await call_next(request)
             if not request.headers.get("authorization"):
-                return JSONResponse({"detail": "Missing authorization header"}, status_code=401)
+                # Include CORS headers so the browser receives Access-Control-Allow-Origin
+                frontend = FRONTEND_URL or "https://pessoa-frontend.onrender.com"
+                return JSONResponse({"detail": "Missing authorization header"}, status_code=401, headers={
+                    'Access-Control-Allow-Origin': frontend,
+                    'Access-Control-Allow-Credentials': 'true'
+                })
 
         response = await call_next(request)
 
