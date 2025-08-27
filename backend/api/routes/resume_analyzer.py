@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Form
+from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Form, Body, Query
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import List
 from supabase import create_client, Client
@@ -14,7 +14,8 @@ _USER_CACHE_TTL = 5  # seconds
 
 # --- Pydantic model for the delete request body ---
 class DeleteRequest(BaseModel):
-    ids: List[int]
+    # IDs are stored as UUIDs in the database; accept strings so both UUIDs and numeric ids work.
+    ids: List[str]
 
 # --- Router Definition ---
 router = APIRouter(prefix="/resumes", tags=["Resume Analysis & Bank"])
@@ -178,15 +179,35 @@ async def get_all_resumes(
 
 @router.delete("/")
 async def delete_resumes(
-    request: DeleteRequest, 
+    request: DeleteRequest | None = Body(None),
+    ids: str | None = Query(None, description="Comma-separated list of resume ids to delete"),
     supabase: Client = Depends(get_supabase_client),
     current_user: dict = Depends(get_current_user)
 ):
-    ids_to_delete = request.ids
+    """Delete resumes belonging to the current user.
+
+    Accepts either a JSON body: {"ids": ["id1","id2"]} or a query param: ?ids=id1,id2
+    This avoids 422 errors when clients send UUID strings or when some clients cannot send a
+    request body with DELETE.
+    """
+    ids_to_delete = []
+
+    # Prefer JSON body if provided
+    if request and getattr(request, 'ids', None):
+        ids_to_delete = request.ids
+    elif ids:
+        # parse comma separated ids from query param
+        ids_to_delete = [s.strip() for s in ids.split(',') if s.strip()]
+
     if not ids_to_delete:
-        raise HTTPException(status_code=400, detail="No resume IDs provided.")
-    
+        raise HTTPException(status_code=400, detail="No resume IDs provided. Provide JSON body {'ids':[...]} or ?ids=id1,id2")
+
     user_id = current_user.get('id')
-    # This securely deletes ONLY the resumes that both have the specified IDs AND belong to the logged-in user.
-    response = supabase.table('resumes').delete().in_('id', ids_to_delete).eq('user_id', user_id).execute()
+
+    # Ensure we only delete resumes owned by the current user. IDs are strings (UUIDs) in DB.
+    response = supabase.table('resumes').delete().in_('id', ids_to_delete).eq('profile_id', user_id).execute()
+
+    if getattr(response, 'error', None):
+        raise HTTPException(status_code=500, detail=str(response.error))
+
     return response.data
