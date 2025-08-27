@@ -77,28 +77,19 @@ def register_user(req: RegisterRequest):
     if req.organization_name:
         org_name = req.organization_name.strip()
         try:
-            # Check if org already exists
+            # Ensure the organizations row exists; create if missing.
             org_check = supabase.table('organizations').select('id').eq('name', org_name).single().execute()
             if not org_check.data:
-                # create org and make this user ADMIN
                 insert_resp = supabase.table('organizations').insert({'name': org_name}).execute()
                 org_id = None
                 if getattr(insert_resp, 'data', None):
                     org_id = insert_resp.data[0].get('id')
-                role = 'ADMIN'
             else:
-                # org exists; find its id and check if it has any admins
                 org_id = org_check.data.get('id') if isinstance(org_check.data, dict) else (org_check.data[0].get('id') if org_check.data else None)
-                # If organization has no admins, promote this user to ADMIN
-                try:
-                    admins_resp = supabase.table('profiles').select('id').eq('organization_id', org_id).eq('role', 'ADMIN').limit(1).execute()
-                    has_admins = bool(admins_resp.data)
-                except Exception:
-                    has_admins = False
-                role = 'ADMIN' if not has_admins else 'MEMBER'
         except Exception as e:
             # If organizations table missing or other error, continue but log
             print('[register_user] org upsert error:', e)
+        # Always assign ADMIN when a user provides organization_name during signup
         profile_payload['organization_name'] = org_name
         # attach organization_id when available
         try:
