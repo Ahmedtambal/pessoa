@@ -6,7 +6,6 @@ from api.models import ResumeAnalysisRequest
 from config.settings import settings
 from services.utils.file_extractor import extract_text_from_file
 
-
 class ResumeService:
     def __init__(self):
         self.client = OpenAI(api_key=settings.OPENAI_API_KEY)
@@ -40,42 +39,31 @@ Now, process the following CV text and provide only the JSON object as a respons
 """
 
         self.cv_comparison_prompt = """
-You are an expert Senior Technical Recruiter. Your task is to analyse a Job Description (JD) and a set of candidate CVs. Produce a clear, structured report in British English (UK).
+You are an expert Senior Technical Recruiter. Your task is to analyse a Job Description (JD) and a set of candidate CVs. You must provide a detailed comparison in three distinct parts, written in **British English (UK)**.
 
-CRITICAL FORMATTING RULES:
-1. No bolding or emphasis characters (no **, __, etc.). Plain text only.
-2. Produce exactly four sections with the headings shown below (in this order).
-3. All tables must be valid Markdown tables.
-4. Do not include any text before the first heading.
+**CRITICAL & STRICT FORMATTING REQUIREMENTS:**
+1.  **NO BOLD TEXT OR EMPHASIS:** Your entire response must be in plain text. You MUST NOT use asterisks (`**`) or any other characters for bolding or emphasis.
+2.  **USE EXACT HEADINGS:** You MUST produce exactly three sections, and their headings MUST be exactly as follows, including the '##' and capitalization: `## PART 1: INDIVIDUAL ANALYSIS`, `## PART 2: COMPARATIVE ANALYSIS`, `## FINAL RECOMMENDATION`.
+3.  **ALL TABLES MUST BE MARKDOWN:** All content under PART 1 and PART 2 must be valid Markdown tables.
+4.  **NO TEXT BEFORE FIRST HEADING:** Do not include any introductory text or summary before the first `##` heading. Your response must be parsable by a script that splits the text by these exact headings.
 
-PART 1: INDIVIDUAL ANALYSIS
+**PART 1: INDIVIDUAL ANALYSIS**
 - Create a Markdown table comparing each CV against the JD.
-- Table columns: `Applicant`, `Overall Score (/100)`, `Key Strengths`, `Potential Gaps`.
+- Table columns MUST be: `Applicant`, `Overall Score (/100)`, `Key Strengths`, `Potential Gaps`.
 
-PART 2: COMPARATIVE ANALYSIS
-- Create a Markdown table comparing the top applicants on key criteria.
-- Table columns: `Criterion`, `[Applicant 1 Name]`, `[Applicant 2 Name]`, `[etc...]`.
+**PART 2: COMPARATIVE ANALYSIS**
+- Create a Markdown table comparing the top applicants against each other on key criteria.
+- Table columns MUST be: `Criterion`, `[Applicant 1 Name]`, `[Applicant 2 Name]`, `[etc...]`.
 
-PART 3: BRIEF CONCLUSIONS
-- Provide a short (1-3 sentences) neutral summary of the comparison results and any important context or tie-breakers used.
-
-FINAL RECOMMENDATION
-- This must be a separate section with the heading exactly: `FINAL RECOMMENDATION` (all caps).
-- Present the recommendation as a concise, user-friendly block containing the following sub-items (use plain text lines or a short bullet list):
-  - Best fit: the candidate's full name (plain text).
-  - Why: 2-3 specific points summarising the decisive strengths that make them the best fit.
-  - Main risks or gaps: 1-2 short notes about potential concerns and how to mitigate them.
-  - Suggested next steps: 2 concrete, actionable recommendations (e.g., specific interview focus, a technical test, or a reference check).
-
-Keep the tone helpful and practical; the recommendation should be easy for a hiring manager to act on.
+**FINAL RECOMMENDATION**
+- Write a concluding paragraph justifying your choice. State the best fit, why, and any risks.
 
 Now, perform the full analysis on the following Job Description and Candidate CVs.
 """
 
     def extract_profile_from_cv(self, file: UploadFile) -> dict:
         raw_text = extract_text_from_file(file)
-        if not raw_text:
-            return {}
+        if not raw_text: return {}
         try:
             completion = self.client.chat.completions.create(
                 model="gpt-4o-mini",
@@ -85,43 +73,32 @@ Now, perform the full analysis on the following Job Description and Candidate CV
                     {"role": "user", "content": raw_text},
                 ],
             )
-        except Exception as e:
-            # Log the error and raise a clear exception so the API returns a 500 quickly
-            print('[resume_service] profile extraction OpenAI error:', repr(e))
-            raise Exception('AI profile extraction failed: ' + str(e))
-
-        response_content = completion.choices[0].message.content or "{}"
-        try:
+            response_content = completion.choices[0].message.content or "{}"
             extracted_data = json.loads(response_content)
+            extracted_data["full_extracted_text"] = raw_text
+            return extracted_data
         except Exception as e:
-            print('[resume_service] JSON parse error from AI response:', repr(e), 'raw:', response_content)
-            raise Exception('AI returned invalid JSON for profile extraction')
-        extracted_data["full_extracted_text"] = raw_text
-        return extracted_data
+            print(f"Error in profile extraction: {e}")
+            raise HTTPException(status_code=500, detail="AI profile extraction failed.")
 
     def compare_cvs_to_jd(self, jd: str, cv_files: List[UploadFile]) -> str:
         cv_texts = {}
         for cv_file in cv_files:
             if cv_file.filename:
                 cv_texts[cv_file.filename] = extract_text_from_file(cv_file)
-
-        cv_data_str = "\n".join([
-            f"### CV: {name}\n---\n{text}\n---\n" for name, text in cv_texts.items()
-        ])
+        cv_data_str = "\n".join([f"### CV: {name}\n---\n{text}\n---\n" for name, text in cv_texts.items()])
         user_prompt = f"## Job Description:\n{jd}\n\n## Candidate CVs:\n{cv_data_str}"
-
-        completion = self.client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": self.cv_comparison_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-        )
         try:
+            completion = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": self.cv_comparison_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+            )
             return completion.choices[0].message.content or "Error: Could not generate comparison."
         except Exception as e:
-            print('[resume_service] error reading AI comparison response:', repr(e))
-            raise Exception('AI comparison failed: ' + str(e))
-
+            print(f"Error in CV comparison: {e}")
+            raise HTTPException(status_code=500, detail="AI comparison failed.")
 
 resume_service = ResumeService()
