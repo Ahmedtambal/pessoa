@@ -71,8 +71,9 @@ def register_user(req: RegisterRequest):
     if req.full_name:
         profile_payload['full_name'] = req.full_name
 
-    # If organization provided: create organization row if missing and determine role
-    role = 'MEMBER'
+    # Default role: self-signups (no organization provided) should be ADMIN per requested semantics.
+    # If an organization is provided, existing logic below will determine ADMIN vs MEMBER.
+    role = 'ADMIN'
     if req.organization_name:
         org_name = req.organization_name.strip()
         try:
