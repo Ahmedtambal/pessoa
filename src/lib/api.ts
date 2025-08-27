@@ -1,4 +1,8 @@
-const BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://127.0.0.1:8000';
+// Prefer explicit VITE_BACKEND_URL set at build/deploy time. When missing (common
+// if env vars weren't set on the hosting provider), fall back at runtime to the
+// same origin so the frontend doesn't call localhost on the server.
+const runtimeFallback = (typeof window !== 'undefined' && window.location && window.location.origin) ? window.location.origin : 'http://127.0.0.1:8000';
+const BASE_URL = import.meta.env.VITE_BACKEND_URL || runtimeFallback;
 
 export const API_ROUTES = {
   ADMIN_USERS: `${BASE_URL}/admin/users`,
