@@ -9,3 +9,5 @@ supabase
 python-multipart
 email-validator  
 requests==2.31.0
+redis
+rq

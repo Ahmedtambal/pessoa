@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Form, Body, Query
+from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Form, Body, Query, JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import List
 from supabase import create_client, Client
@@ -6,6 +6,12 @@ from pydantic import BaseModel
 from config.settings import settings
 from services.resume_service import resume_service
 from time import time
+from fastapi import BackgroundTasks
+import os
+import uuid
+from services.audit_service import log_audit
+from services.job_queue import enqueue_job, get_redis
+from services import tasks as job_tasks
 
 # Simple in-memory TTL cache for token -> user lookups to avoid repeat network calls
 # Keyed by raw JWT; small TTL reduces latency for rapid UI requests (e.g. settings page)
@@ -24,6 +30,21 @@ supabase_bearer_scheme = HTTPBearer()
 # --- Supabase Client Dependency ---
 def get_supabase_client():
     return create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
+
+
+ALLOWED_EXT = {'.pdf', '.docx', '.txt'}
+MAX_BYTES = 5 * 1024 * 1024  # 5 MB
+
+def validate_upload_file(upload: UploadFile):
+    name = upload.filename or ''
+    ext = os.path.splitext(name)[1].lower()
+    if ext not in ALLOWED_EXT:
+        raise HTTPException(status_code=400, detail='Invalid file type')
+    # probe size
+    data = upload.file.read(MAX_BYTES + 1)
+    upload.file.seek(0)
+    if len(data) > MAX_BYTES:
+        raise HTTPException(status_code=400, detail='File too large')
 
 # --- Reusable Dependency to Get and Validate the User from JWT ---
 async def get_current_user(
@@ -68,6 +89,135 @@ async def compare_cvs_and_jd(
         return {"analysis": analysis_result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred during analysis: {str(e)}")
+
+
+@router.post('/compare-async')
+async def compare_cvs_and_jd_async(
+    background_tasks: BackgroundTasks,
+    jd: str = Form(...),
+    files: List[UploadFile] = File(...),
+    supabase: Client = Depends(get_supabase_client),
+    current_user: dict = Depends(get_current_user)
+):
+    # Validate and store files, prepare cv_texts
+    try:
+        user_id = current_user.get('id')
+        if not user_id:
+            raise HTTPException(status_code=401, detail='Invalid user')
+
+        cv_texts = []
+        storage_paths = []
+        for f in files:
+            validate_upload_file(f)
+            raw_text = ''
+            try:
+                # extract_profile_from_cv can accept UploadFile but may read the file; ensure we pass a copy
+                raw = resume_service.extract_profile_from_cv(file=f)
+                raw_text = raw.get('full_extracted_text') if raw else ''
+            except Exception:
+                # fallback to text extractor
+                from services.utils.file_extractor import extract_text_from_file
+                # file.file is a SpooledTemporaryFile; seek to start
+                try:
+                    f.file.seek(0)
+                except Exception:
+                    pass
+                raw_text = extract_text_from_file(f)
+
+            storage_path = f"{user_id}/{uuid.uuid4()}_{f.filename}"
+            # read file bytes safely
+            try:
+                f.file.seek(0)
+            except Exception:
+                pass
+            file_bytes = f.file.read()
+            supabase.storage.from_("cv_uploads").upload(path=storage_path, file=file_bytes, file_options={"content-type": f.content_type, "upsert": "true"})
+            storage_paths.append(storage_path)
+            cv_texts.append((f.filename or 'unknown', raw_text))
+
+        # Create a job record in DB
+        job_id = str(uuid.uuid4())
+        job_payload = {
+            'id': job_id,
+            'user_id': user_id,
+            'status': 'queued',
+            'job_type': 'compare_cvs',
+            'input': {'jd': jd, 'storage_paths': storage_paths},
+        }
+        # attempt insert
+        supabase.table('jobs').insert(job_payload).execute()
+        try:
+            log_audit(user_id, 'job_created', model=None, details={'job_id': job_id, 'type': 'compare_cvs'})
+        except Exception:
+            pass
+
+        # If Redis is configured, enqueue an RQ job; otherwise fall back to BackgroundTasks
+        try:
+            redis_conn = get_redis()
+        except Exception:
+            redis_conn = None
+
+        if redis_conn:
+            # enqueue an RQ job that calls our task wrapper
+            try:
+                enqueue_job(job_tasks.task_compare_texts, user_id, {'texts': cv_texts, 'jd': jd, 'storage_paths': storage_paths, 'job_id': job_id})
+            except Exception as e:
+                print('[compare-async] enqueue to RQ failed, falling back to BackgroundTasks:', e)
+                # fallback to BackgroundTasks
+                def _worker(jid, jd_text, cvs):
+                    try:
+                        result = resume_service.compare_texts_to_jd(jd_text, cvs)
+                        supabase.table('jobs').update({'status': 'done', 'result': {'analysis': result}}).eq('id', jid).execute()
+                        try:
+                            log_audit(user_id=user_id, action='compare_cvs_async_completed', model='gpt-4o-mini', prompt=jd_text[:2000], output=(str(result)[:8000] if result else None), details={'job_id': jid})
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        supabase.table('jobs').update({'status': 'failed', 'error': str(e)}).eq('id', jid).execute()
+
+                background_tasks.add_task(_worker, job_id, jd, cv_texts)
+        else:
+            # No Redis: run via BackgroundTasks (existing approach)
+            def _worker(jid, jd_text, cvs):
+                try:
+                    result = resume_service.compare_texts_to_jd(jd_text, cvs)
+                    supabase.table('jobs').update({'status': 'done', 'result': {'analysis': result}}).eq('id', jid).execute()
+                    try:
+                        log_audit(user_id=user_id, action='compare_cvs_async_completed', model='gpt-4o-mini', prompt=jd_text[:2000], output=(str(result)[:8000] if result else None), details={'job_id': jid})
+                    except Exception:
+                        pass
+                except Exception as e:
+                    supabase.table('jobs').update({'status': 'failed', 'error': str(e)}).eq('id', jid).execute()
+
+            background_tasks.add_task(_worker, job_id, jd, cv_texts)
+
+        return JSONResponse(status_code=202, content={'job_id': job_id, 'status': 'queued'})
+    except HTTPException:
+        raise
+    except Exception as e:
+        print('[compare-async] error:', e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get('/jobs/{job_id}')
+async def get_job(job_id: str, supabase: Client = Depends(get_supabase_client), current_user: dict = Depends(get_current_user)):
+    try:
+        resp = supabase.table('jobs').select('*').eq('id', job_id).single().execute()
+        if getattr(resp, 'error', None):
+            raise HTTPException(status_code=404, detail='Job not found')
+        job = resp.data
+        # ensure the requesting user owns the job or is admin
+        if job.get('user_id') != current_user.get('id'):
+            # check admin via profiles
+            prof = supabase.table('profiles').select('role').eq('id', current_user.get('id')).single().execute()
+            if not (prof and prof.data and prof.data.get('role') == 'ADMIN'):
+                raise HTTPException(status_code=403, detail='Forbidden')
+        return job
+    except HTTPException:
+        raise
+    except Exception as e:
+        print('[get_job] error:', e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/upload")
@@ -158,6 +308,12 @@ async def upload_and_process_resume(
 
         if not response or not getattr(response, 'data', None):
             raise HTTPException(status_code=500, detail="Failed to save resume metadata to the database.")
+
+        # Audit resume upload
+        try:
+            log_audit(user_id, 'resume_uploaded', model=None, details={'file_name': file.filename, 'storage_path': storage_path})
+        except Exception:
+            pass
 
         return response.data[0]
 

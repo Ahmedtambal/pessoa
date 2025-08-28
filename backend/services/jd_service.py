@@ -1,6 +1,7 @@
 from openai import OpenAI
 from api.models import JobDescriptionRequest
 from config.settings import settings
+from services.audit_service import log_audit
 
 class JDService:
     def __init__(self):
@@ -66,7 +67,19 @@ Now, generate the job description based on the user's data below.
 
         # Ensure content is not None before returning
         try:
-            return completion.choices[0].message.content or ""
+            output = completion.choices[0].message.content or ""
+            try:
+                log_audit(
+                    user_id=None,
+                    action='generate_jd',
+                    model='gpt-4o-mini',
+                    prompt=(user_input[:2000] if user_input else None),
+                    output=(output[:8000] if output else None),
+                    details={"job_title": request.job_title},
+                )
+            except Exception as e:
+                print(f"[jd_service] audit log failed: {e}")
+            return output
         except Exception as e:
             print('[jd_service] error reading AI response:', repr(e))
             raise Exception('AI returned unexpected response for job description')

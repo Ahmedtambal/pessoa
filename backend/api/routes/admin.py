@@ -10,6 +10,8 @@ from typing import List
 
 from config.settings import settings
 from .resume_analyzer import get_current_user, get_supabase_client
+from services.audit_service import get_admin_client, log_audit
+from datetime import datetime
 from time import time
 
 # Small in-memory cache to reduce repeated DB role lookups when the settings page polls
@@ -255,6 +257,11 @@ async def invite_user_by_email(
 
             response = supabase.auth.admin.invite_user_by_email(email, options)
             invited_users.append(response)
+            # Audit: record invite attempt
+            try:
+                log_audit(current_user.get('id'), 'invite_sent', model=None, details={'email': email, 'org': org_name})
+            except Exception:
+                pass
         except Exception as e:
             errors.append({"email": email, "error": str(e)})
             print(f"INVITE ERROR for {email}: {str(e)}")
@@ -266,11 +273,16 @@ async def invite_user_by_email(
     return {"message": "Invitations sent successfully", "data": invited_users}
 
 @router.post("/organization/delete", dependencies=[Depends(is_admin_user)])
-async def delete_organization(request: DeleteOrgRequest, supabase: Client = Depends(get_supabase_admin_client)):
+async def delete_organization(request: DeleteOrgRequest, supabase: Client = Depends(get_supabase_admin_client), current_user: dict = Depends(get_current_user)):
     try:
         resp = supabase.rpc('delete_organization_data', {'org_name': request.organization_name}).execute()
         if getattr(resp, 'error', None):
             raise Exception(resp.error)
+        # Audit organization deletion
+        try:
+            log_audit(None, 'organization_deleted', model=None, details={'organization_name': request.organization_name, 'initiator': current_user.get('id')})
+        except Exception:
+            pass
         return {"message": f"Successfully deleted organization '{request.organization_name}' and all associated data."}
     except Exception as e:
         # If the database function is missing (common on some Supabase setups),
@@ -359,6 +371,12 @@ async def upsert_my_profile(request: ProfileUpsertRequest, current_user: dict = 
         if getattr(response, 'error', None):
             raise HTTPException(status_code=500, detail=str(response.error))
 
+        # Audit profile upsert
+        try:
+            log_audit(user_id, 'profile_upserted', model=None, details={'payload': {k: payload.get(k) for k in ('full_name','organization_name')}})
+        except Exception:
+            pass
+
         # If the caller provided an organization_name, ensure the organizations
         # table contains a row for it. This keeps explicit org records in sync
         # with profiles that reference them. If the organizations table does
@@ -414,6 +432,12 @@ async def delete_my_account(current_user: dict = Depends(get_current_user), supa
                     # Non-fatal; proceed to delete the auth user
                     pass
 
+        # Audit account deletion request
+        try:
+            log_audit(user_id, 'account_delete_requested', model=None, details={'role': role, 'org_name': org_name})
+        except Exception:
+            pass
+
         # Delete the auth user using admin client
         try:
             admin_delete_auth_user(user_id)
@@ -426,4 +450,111 @@ async def delete_my_account(current_user: dict = Depends(get_current_user), supa
     except HTTPException:
         raise
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Right-to-be-forgotten endpoint: allows a user to request erasure of their
+# personal data, or an admin to request erasure for a specific user. The
+# operation attempts to delete profiles, resumes, jobs and anonymize audit
+# rows by clearing the user_id. It writes audit events before and after the
+# erase operation using the service-role client.
+# Small test endpoint to verify audit log writes. This is intentionally simple
+# and uses the service-role client to insert a row into `audit_logs` and return
+# the created `id`. It requires the user to be authenticated (via
+# `get_current_user`) but does not require admin privileges so it can be used
+# for basic smoke testing.
+class TestAuditRequest(BaseModel):
+    note: str | None = None
+
+
+@router.post('/test-audit')
+async def test_audit_write(req: TestAuditRequest, current_user: dict = Depends(get_current_user)):
+    try:
+        admin_client = get_admin_client()
+        payload = {
+            'user_id': current_user.get('id'),
+            'action': 'test_audit_write',
+            'model': 'internal_test',
+            'prompt': None,
+            'output': None,
+            'details': {'note': req.note}
+        }
+        resp = admin_client.table('audit_logs').insert(payload).select('id').execute()
+        if getattr(resp, 'error', None):
+            print('[test_audit_write] insert error:', resp.error)
+            raise HTTPException(status_code=500, detail=str(resp.error))
+
+        created = (resp.data or []) and (resp.data[0].get('id'))
+        return {'message': 'audit_written', 'id': created}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print('[test_audit_write] unexpected error:', e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class EraseRequest(BaseModel):
+    target_user_id: str | None = None
+
+
+@router.post('/privacy/erase')
+async def privacy_erase(req: EraseRequest, current_user: dict = Depends(get_current_user), supabase: Client = Depends(get_supabase_admin_client)):
+    """Right-to-be-forgotten: delete or anonymize all data for the target user.
+
+    If target_user_id is not provided, the current_user's data is erased.
+    Admins may erase other users by providing target_user_id.
+    """
+    try:
+        requester_id = current_user.get('id')
+        target = req.target_user_id or requester_id
+
+        # Only allow erasing other accounts if requester is admin
+        if target != requester_id:
+            # verify admin
+            profile = supabase.table('profiles').select('role').eq('id', requester_id).single().execute()
+            if getattr(profile, 'error', None):
+                raise HTTPException(status_code=500, detail=str(profile.error))
+            role = profile.data.get('role') if profile and profile.data else None
+            if role != 'ADMIN':
+                raise HTTPException(status_code=403, detail='Forbidden')
+
+        # Log the erase request
+        log_audit(requester_id, 'privacy_erase_requested', model=None, prompt=None, output=None, details={'target': target})
+
+        # Attempt best-effort deletions: profiles, resumes, jobs, and auth user
+        try:
+            supabase.table('resumes').delete().eq('user_id', target).execute()
+        except Exception as e:
+            print(f"[privacy_erase] resumes delete failed for {target}: {e}")
+
+        try:
+            supabase.table('jobs').delete().eq('user_id', target).execute()
+        except Exception as e:
+            print(f"[privacy_erase] jobs delete failed for {target}: {e}")
+
+        try:
+            supabase.table('profiles').delete().eq('id', target).execute()
+        except Exception as e:
+            print(f"[privacy_erase] profiles delete failed for {target}: {e}")
+
+        # Anonymize audit logs instead of deleting them: clear user_id and add metadata
+        try:
+            supabase.table('audit_logs').update({'user_id': None, 'details': {'erased_for': target, 'erased_by': requester_id, 'erased_at': datetime.utcnow().isoformat()}}).eq('user_id', target).execute()
+        except Exception as e:
+            print(f"[privacy_erase] audit_logs anonymization failed for {target}: {e}")
+
+        # Delete auth user via admin API — best-effort
+        try:
+            admin_delete_auth_user(target)
+        except Exception as e:
+            print(f"[privacy_erase] admin_delete_auth_user failed for {target}: {e}")
+
+        # Final audit entry
+        log_audit(requester_id, 'privacy_erase_completed', model=None, prompt=None, output=None, details={'target': target})
+
+        return {'message': 'erase_completed', 'target': target}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print('[privacy_erase] unexpected error:', e)
         raise HTTPException(status_code=500, detail=str(e))

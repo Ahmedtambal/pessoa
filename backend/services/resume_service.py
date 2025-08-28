@@ -5,6 +5,7 @@ from typing import List
 from api.models import ResumeAnalysisRequest
 from config.settings import settings
 from services.utils.file_extractor import extract_text_from_file
+from services.audit_service import log_audit
 
 class ResumeService:
     def __init__(self):
@@ -88,6 +89,18 @@ Now, perform the full analysis on the following Job Description and Candidate CV
             response_content = completion.choices[0].message.content or "{}"
             extracted_data = json.loads(response_content)
             extracted_data["full_extracted_text"] = raw_text
+            # Audit log: capture the extraction event (non-blocking)
+            try:
+                log_audit(
+                    user_id=None,
+                    action='extract_profile',
+                    model='gpt-4o-mini',
+                    prompt=(self.profile_extraction_prompt[:1000] if self.profile_extraction_prompt else None),
+                    output=(response_content[:4000] if response_content else None),
+                    details={"source": (getattr(file, 'filename', None) if file is not None else 'raw_text')},
+                )
+            except Exception as e:
+                print(f"[resume_service] audit log failed: {e}")
             return extracted_data
         except Exception as e:
             print(f"Error in profile extraction: {e}")
@@ -118,9 +131,55 @@ Now, perform the full analysis on the following Job Description and Candidate CV
                     {"role": "user", "content": user_prompt},
                 ],
             )
-            return completion.choices[0].message.content or "Error: Could not generate comparison."
+            output = completion.choices[0].message.content or "Error: Could not generate comparison."
+            # Audit log for CV comparison
+            try:
+                log_audit(
+                    user_id=None,
+                    action='compare_cvs',
+                    model='gpt-4o-mini',
+                    prompt=(user_prompt[:2000] if user_prompt else None),
+                    output=(output[:8000] if output else None),
+                    details={"cv_count": len(cv_files)},
+                )
+            except Exception as e:
+                print(f"[resume_service] audit log failed: {e}")
+            return output
         except Exception as e:
             print(f"Error in CV comparison: {e}")
+            raise HTTPException(status_code=500, detail="AI comparison failed.")
+
+    def compare_texts_to_jd(self, jd: str, cv_texts: List[tuple]) -> str:
+        """Accepts a list of tuples (name, raw_text) and performs the same comparison.
+
+        This is useful for background jobs where files have been pre-extracted to text.
+        """
+        cv_data_str = "\n".join([f"### CV: {name}\n---\n{text}\n---\n" for name, text in cv_texts])
+        user_prompt = f"## Job Description:\n{jd}\n\n## Candidate CVs:\n{cv_data_str}"
+        try:
+            completion = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": self.cv_comparison_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+            )
+            output = completion.choices[0].message.content or "Error: Could not generate comparison."
+            # Audit
+            try:
+                log_audit(
+                    user_id=None,
+                    action='compare_cvs_background',
+                    model='gpt-4o-mini',
+                    prompt=(user_prompt[:2000] if user_prompt else None),
+                    output=(output[:8000] if output else None),
+                    details={"cv_count": len(cv_texts)},
+                )
+            except Exception as e:
+                print(f"[resume_service] background audit log failed: {e}")
+            return output
+        except Exception as e:
+            print(f"Error in CV comparison (background): {e}")
             raise HTTPException(status_code=500, detail="AI comparison failed.")
 
 resume_service = ResumeService()

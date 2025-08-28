@@ -13,6 +13,7 @@ class RegisterRequest(BaseModel):
     password: str
     full_name: Optional[str] = None
     organization_name: Optional[str] = None
+    tos_accepted: Optional[bool] = False
 
 
 @router.post('/register')
@@ -104,6 +105,13 @@ def register_user(req: RegisterRequest):
             pass
 
     profile_payload['role'] = role
+    # store tos acceptance timestamp if provided
+    try:
+        if getattr(req, 'tos_accepted', False):
+            import datetime
+            profile_payload['tos_accepted_at'] = datetime.datetime.utcnow().isoformat()
+    except Exception:
+        pass
 
     try:
         supabase.table('profiles').upsert(profile_payload).execute()

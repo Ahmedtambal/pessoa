@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str
     SUPABASE_URL: str
     SUPABASE_SERVICE_ROLE_KEY: str
+    REDIS_URL: str | None = 'redis://localhost:6379/0'
 
     class Config:
         # THE FIX: Provide an explicit, absolute path to the correct .env file
