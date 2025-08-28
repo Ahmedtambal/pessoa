@@ -113,16 +113,11 @@ async def compare_cvs_and_jd(
     current_user: dict = Depends(get_current_user)
 ):
     try:
-        # Security: Validate all uploaded files
-        for file in files:
-            validate_file_security(file)
-
         analysis_result = resume_service.compare_cvs_to_jd(jd, files)
         return {"analysis": analysis_result}
     except Exception as e:
-        # Log error without exposing sensitive information
-        print("An error occurred during CV comparison")
-        raise HTTPException(status_code=500, detail="An error occurred during analysis")
+        print(f"Error during CV comparison: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"An error occurred during analysis: {str(e)}")
 
 
 @router.post("/upload")
@@ -132,41 +127,36 @@ async def upload_and_process_resume(
     current_user: dict = Depends(get_current_user)
 ):
     try:
-        # Security: Validate file before processing
-        validate_file_security(file)
-
         user_id = current_user.get('id')
         if not user_id:
             raise HTTPException(status_code=401, detail="User ID could not be determined from token.")
 
+        # Extract profile data from the CV
         profile_data = resume_service.extract_profile_from_cv(file)
         if not profile_data or not profile_data.get('name'):
             raise HTTPException(status_code=400, detail="Could not extract key information from CV.")
 
+        # Read file bytes for storage
         file_bytes = await file.read()
         
-        # This is the corrected storage path, relative to the bucket and user-specific.
+        # Create user-specific storage path
         storage_path = f"{user_id}/{file.filename}"
         
-        supabase.storage.from_("cv_uploads").upload(
-            path=storage_path, 
-            file=file_bytes, 
-            file_options={"content-type": file.content_type, "upsert": "true"}
-        )
-
-        # Get user's profile ID for proper foreign key relationship
-        profile_id = None
+        # Upload to Supabase Storage
         try:
-            profile_resp = supabase.table('profiles').select('id').eq('id', user_id).single().execute()
-            if profile_resp.data:
-                profile_id = profile_resp.data.get('id')
-        except Exception:
-            # Profile might not exist yet, use user_id as fallback
-            profile_id = user_id
+            supabase.storage.from_("cv_uploads").upload(
+                path=storage_path, 
+                file=file_bytes, 
+                file_options={"content-type": file.content_type, "upsert": "true"}
+            )
+        except Exception as storage_error:
+            print(f"Storage upload error: {storage_error}")
+            raise HTTPException(status_code=500, detail="Failed to upload file to storage")
 
+        # Create database record with both user_id and profile_id
         db_record = {
-            "user_id": user_id,
-            "profile_id": profile_id,  # Add profile_id for proper foreign key
+            "user_id": user_id,        # Legacy support
+            "profile_id": user_id,     # Preferred - links to profiles table
             "file_name": file.filename,
             "storage_path": storage_path,
             "name": profile_data.get('name'),
@@ -180,80 +170,55 @@ async def upload_and_process_resume(
             "full_extracted_text": profile_data.get('full_extracted_text'),
         }
         
-        # Try inserting the record. Handle missing tables gracefully.
-        try:
-            # First check if resumes table exists
-            supabase.table('resumes').select('id').limit(1).execute()
+        # Try inserting the record with proper error handling
+        def _attempt_insert(record):
+            resp = supabase.table('resumes').insert(record).execute()
+            return resp
 
-            # If we get here, the table exists, so proceed with normal insertion
-            def _attempt_insert(record):
-                resp = supabase.table('resumes').insert(record).execute()
-                return resp
+        response = None
+        remaining_record = dict(db_record)
+        max_retries = len(remaining_record)
+        import re
 
-            response = None
-            remaining_record = dict(db_record)
-            max_retries = len(remaining_record)
-            import re
+        for _ in range(max_retries + 1):
+            try:
+                response = _attempt_insert(remaining_record)
+                if getattr(response, 'error', None):
+                    # Some PostgREST errors are objects; stringify for inspection
+                    err_msg = str(response.error)
+                    raise Exception(err_msg)
 
-            for _ in range(max_retries + 1):
-                try:
-                    response = _attempt_insert(remaining_record)
-                    if getattr(response, 'error', None):
-                        # Some PostgREST errors are objects; stringify for inspection
-                        err_msg = str(response.error)
-                        raise Exception(err_msg)
+                # success
+                break
+            except Exception as insert_err:
+                err_text = str(insert_err)
+                print(f"[upload_and_process_resume] insert error: {err_text}")
+                # Look for common indications of missing columns
+                # e.g. "Could not find the 'education_summary' column of 'resumes' in the schema cache"
+                m = re.search(r"Could not find the '([a-zA-Z0-9_]+)' column", err_text)
+                if not m:
+                    # alternate pattern: column "user_id" does not exist
+                    m = re.search(r'column "([a-zA-Z0-9_]+)" does not exist', err_text)
 
-                    # success
-                    break
-                except Exception as insert_err:
-                    err_text = str(insert_err)
-                    # Log error without exposing sensitive data
-                    print(f"[upload_and_process_resume] Database insert error occurred")
-                    # Look for common indications of missing columns
-                    # e.g. "Could not find the 'education_summary' column of 'resumes' in the schema cache"
-                    m = re.search(r"Could not find the '([a-zA-Z0-9_]+)' column", err_text)
-                    if not m:
-                        # alternate pattern: column "user_id" does not exist
-                        m = re.search(r'column "([a-zA-Z0-9_]+)" does not exist', err_text)
+                if m:
+                    col = m.group(1)
+                    if col in remaining_record:
+                        print(f"[upload_and_process_resume] removing missing column '{col}' and retrying")
+                        remaining_record.pop(col, None)
+                        continue
 
-                    if m:
-                        col = m.group(1)
-                        if col in remaining_record:
-                            print(f"[upload_and_process_resume] Removing missing column '{col}' and retrying")
-                            remaining_record.pop(col, None)
-                            continue
+                # If we couldn't parse a missing-column error, or no recoverable keys remain,
+                # surface a clear error to the client.
+                raise HTTPException(status_code=500, detail=f"Failed to save resume metadata: {err_text}")
 
-                    # If we couldn't parse a missing-column error, or no recoverable keys remain,
-                    # surface a clear error to the client.
-                    raise HTTPException(status_code=500, detail="Failed to save resume metadata to the database.")
+        if not response or not getattr(response, 'data', None):
+            raise HTTPException(status_code=500, detail="Failed to save resume metadata to the database.")
 
-            if not response or not getattr(response, 'data', None):
-                raise HTTPException(status_code=500, detail="Failed to save resume metadata to the database.")
-
-            return response.data[0]
-
-        except Exception as e:
-            # If resumes table doesn't exist, return success with just file storage
-            # The user can still use the file for comparison without database storage
-            error_msg = str(e).lower()
-            if 'relation "public.resumes" does not exist' in error_msg or 'table' in error_msg and 'does not exist' in error_msg:
-                print(f"[upload_and_process_resume] Resumes table doesn't exist, returning file info only")
-                return {
-                    "id": f"temp_{user_id}_{file.filename}",
-                    "user_id": user_id,
-                    "file_name": file.filename,
-                    "storage_path": storage_path,
-                    "name": profile_data.get('name'),
-                    "message": "File uploaded successfully but database storage is not yet configured. Please run the database setup scripts."
-                }
-            else:
-                # Re-raise other errors
-                raise
+        return response.data[0]
 
     except Exception as e:
-        # Log error without exposing sensitive information
-        print("An error occurred during resume upload processing")
-        raise HTTPException(status_code=500, detail="An error occurred during upload processing")
+        print(f"AN ERROR OCCURRED DURING UPLOAD: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
 
 
 @router.get("/")

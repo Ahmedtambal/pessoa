@@ -79,42 +79,30 @@ async def is_admin_user(current_user: dict = Depends(get_current_user), supabase
 @router.get("/users", dependencies=[Depends(is_admin_user)])
 async def list_users(supabase: Client = Depends(get_supabase_admin_client)):
     try:
-        # Try the RPC function first (new and improved)
+        # Try the improved RPC function first
         response = supabase.rpc('get_users_with_profiles').execute()
         if getattr(response, 'error', None):
-            print('[list_users] RPC error, trying fallback:', response.error)
-            raise Exception(response.error)
+            print('[list_users] get_users_with_profiles error:', response.error)
+            # Try the fallback RPC function
+            response = supabase.rpc('get_profiles_only').execute()
+            if getattr(response, 'error', None):
+                print('[list_users] get_profiles_only error:', response.error)
+                raise Exception(response.error)
 
-        return response.data
+        return response.data or []
 
     except Exception as e:
         frontend = os.getenv('FRONTEND_URL') or 'https://pessoa-frontend.onrender.com'
         print('[list_users] rpc error:', e)
 
-        # Enhanced fallback: get profiles with email from auth.users
+        # Final fallback: direct profiles table query
         try:
-            # First, try to get profiles with email (now that we added the column)
             fallback = supabase.table('profiles').select('id, full_name, email, organization_name, role, created_at').execute()
             if getattr(fallback, 'error', None):
                 print('[list_users] profiles fallback error:', fallback.error)
                 raise Exception(fallback.error)
 
-            # If profiles table doesn't have email data, try to enrich it from auth.users
-            data = fallback.data or []
-            if data and not any(row.get('email') for row in data):
-                # Email column exists but is empty, try to populate from auth.users
-                try:
-                    # Get user emails from auth.users and merge
-                    auth_response = supabase.table('auth.users').select('id, email').execute()
-                    if auth_response.data:
-                        email_map = {user['id']: user['email'] for user in auth_response.data}
-                        for row in data:
-                            if row.get('id') in email_map:
-                                row['email'] = email_map[row['id']]
-                except Exception as auth_error:
-                    print('[list_users] auth.users query error (expected for RLS):', auth_error)
-
-            return data
+            return fallback.data or []
 
         except Exception as e2:
             print('[list_users] fallback profiles error:', e2)
