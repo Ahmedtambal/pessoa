@@ -169,56 +169,75 @@ async def upload_and_process_resume(
             "full_extracted_text": profile_data.get('full_extracted_text'),
         }
         
-        # Try inserting the record. If the database schema is missing optional
-        # columns (common when different deployments have drifted), PostgREST
-        # will return an error like PGRST204 or a message mentioning the column.
-        # Detect that and retry the insert after removing the missing keys so
-        # uploads succeed even on leaner schemas.
-        def _attempt_insert(record):
-            resp = supabase.table('resumes').insert(record).execute()
-            return resp
+        # Try inserting the record. Handle missing tables gracefully.
+        try:
+            # First check if resumes table exists
+            supabase.table('resumes').select('id').limit(1).execute()
 
-        response = None
-        remaining_record = dict(db_record)
-        max_retries = len(remaining_record)
-        import re
+            # If we get here, the table exists, so proceed with normal insertion
+            def _attempt_insert(record):
+                resp = supabase.table('resumes').insert(record).execute()
+                return resp
 
-        for _ in range(max_retries + 1):
-            try:
-                response = _attempt_insert(remaining_record)
-                if getattr(response, 'error', None):
-                    # Some PostgREST errors are objects; stringify for inspection
-                    err_msg = str(response.error)
-                    raise Exception(err_msg)
+            response = None
+            remaining_record = dict(db_record)
+            max_retries = len(remaining_record)
+            import re
 
-                # success
-                break
-            except Exception as insert_err:
-                err_text = str(insert_err)
-                # Log error without exposing sensitive data
-                print(f"[upload_and_process_resume] Database insert error occurred")
-                # Look for common indications of missing columns
-                # e.g. "Could not find the 'education_summary' column of 'resumes' in the schema cache"
-                m = re.search(r"Could not find the '([a-zA-Z0-9_]+)' column", err_text)
-                if not m:
-                    # alternate pattern: column "user_id" does not exist
-                    m = re.search(r'column "([a-zA-Z0-9_]+)" does not exist', err_text)
+            for _ in range(max_retries + 1):
+                try:
+                    response = _attempt_insert(remaining_record)
+                    if getattr(response, 'error', None):
+                        # Some PostgREST errors are objects; stringify for inspection
+                        err_msg = str(response.error)
+                        raise Exception(err_msg)
 
-                if m:
-                    col = m.group(1)
-                    if col in remaining_record:
-                        print(f"[upload_and_process_resume] Removing missing column '{col}' and retrying")
-                        remaining_record.pop(col, None)
-                        continue
+                    # success
+                    break
+                except Exception as insert_err:
+                    err_text = str(insert_err)
+                    # Log error without exposing sensitive data
+                    print(f"[upload_and_process_resume] Database insert error occurred")
+                    # Look for common indications of missing columns
+                    # e.g. "Could not find the 'education_summary' column of 'resumes' in the schema cache"
+                    m = re.search(r"Could not find the '([a-zA-Z0-9_]+)' column", err_text)
+                    if not m:
+                        # alternate pattern: column "user_id" does not exist
+                        m = re.search(r'column "([a-zA-Z0-9_]+)" does not exist', err_text)
 
-                # If we couldn't parse a missing-column error, or no recoverable keys remain,
-                # surface a clear error to the client.
+                    if m:
+                        col = m.group(1)
+                        if col in remaining_record:
+                            print(f"[upload_and_process_resume] Removing missing column '{col}' and retrying")
+                            remaining_record.pop(col, None)
+                            continue
+
+                    # If we couldn't parse a missing-column error, or no recoverable keys remain,
+                    # surface a clear error to the client.
+                    raise HTTPException(status_code=500, detail="Failed to save resume metadata to the database.")
+
+            if not response or not getattr(response, 'data', None):
                 raise HTTPException(status_code=500, detail="Failed to save resume metadata to the database.")
 
-        if not response or not getattr(response, 'data', None):
-            raise HTTPException(status_code=500, detail="Failed to save resume metadata to the database.")
+            return response.data[0]
 
-        return response.data[0]
+        except Exception as e:
+            # If resumes table doesn't exist, return success with just file storage
+            # The user can still use the file for comparison without database storage
+            error_msg = str(e).lower()
+            if 'relation "public.resumes" does not exist' in error_msg or 'table' in error_msg and 'does not exist' in error_msg:
+                print(f"[upload_and_process_resume] Resumes table doesn't exist, returning file info only")
+                return {
+                    "id": f"temp_{user_id}_{file.filename}",
+                    "user_id": user_id,
+                    "file_name": file.filename,
+                    "storage_path": storage_path,
+                    "name": profile_data.get('name'),
+                    "message": "File uploaded successfully but database storage is not yet configured. Please run the database setup scripts."
+                }
+            else:
+                # Re-raise other errors
+                raise
 
     except Exception as e:
         # Log error without exposing sensitive information
@@ -232,8 +251,12 @@ async def get_all_resumes(
     current_user: dict = Depends(get_current_user)
 ):
     user_id = current_user.get('id')
-    # Try to fetch resumes owned by the user's profile_id first, then fallback to user_id
+
     try:
+        # First check if resumes table exists
+        supabase.table('resumes').select('id').limit(1).execute()
+
+        # If table exists, proceed with normal fetching
         response = supabase.table('resumes').select("*").eq('profile_id', user_id).order('uploaded_at', desc=True).execute()
         if getattr(response, 'error', None):
             raise Exception(response.error)
@@ -244,10 +267,16 @@ async def get_all_resumes(
             if getattr(response, 'error', None):
                 raise Exception(response.error)
 
-        return response.data
+        return response.data or []
+
     except Exception as e:
-        print("[get_all_resumes] Error fetching resumes")
-        raise HTTPException(status_code=500, detail="Failed to fetch resumes")
+        error_msg = str(e).lower()
+        if 'relation "public.resumes" does not exist' in error_msg or 'table' in error_msg and 'does not exist' in error_msg:
+            print("[get_all_resumes] Resumes table doesn't exist yet")
+            return []
+        else:
+            print("[get_all_resumes] Error fetching resumes:", str(e))
+            raise HTTPException(status_code=500, detail="Failed to fetch resumes")
 
 
 @router.delete("/")
@@ -277,29 +306,42 @@ async def delete_resumes(
 
     user_id = current_user.get('id')
 
-    # Ensure we only delete resumes owned by the current user. IDs are strings (UUIDs) in DB.
-    deleted_ids = []
-
-    # First attempt delete by profile_id
     try:
-        resp1 = supabase.table('resumes').delete().in_('id', ids_to_delete).eq('profile_id', user_id).execute()
-        if getattr(resp1, 'error', None):
-            print("[delete_resumes] Error deleting by profile_id")
-        else:
-            deleted_ids.extend([r.get('id') for r in (resp1.data or []) if r.get('id')])
-    except Exception as e:
-        print("[delete_resumes] Exception deleting by profile_id")
+        # First check if resumes table exists
+        supabase.table('resumes').select('id').limit(1).execute()
 
-    # Delete any remaining ids using user_id (legacy column)
-    remaining = [i for i in ids_to_delete if i not in deleted_ids]
-    if remaining:
+        # If table exists, proceed with deletion
+        deleted_ids = []
+
+        # First attempt delete by profile_id
         try:
-            resp2 = supabase.table('resumes').delete().in_('id', remaining).eq('user_id', user_id).execute()
-            if getattr(resp2, 'error', None):
-                print("[delete_resumes] Error deleting by user_id")
+            resp1 = supabase.table('resumes').delete().in_('id', ids_to_delete).eq('profile_id', user_id).execute()
+            if getattr(resp1, 'error', None):
+                print("[delete_resumes] Error deleting by profile_id")
             else:
-                deleted_ids.extend([r.get('id') for r in (resp2.data or []) if r.get('id')])
+                deleted_ids.extend([r.get('id') for r in (resp1.data or []) if r.get('id')])
         except Exception as e:
-            print("[delete_resumes] Exception deleting by user_id")
+            print("[delete_resumes] Exception deleting by profile_id")
 
-    return {"deleted_ids": deleted_ids}
+        # Delete any remaining ids using user_id (legacy column)
+        remaining = [i for i in ids_to_delete if i not in deleted_ids]
+        if remaining:
+            try:
+                resp2 = supabase.table('resumes').delete().in_('id', remaining).eq('user_id', user_id).execute()
+                if getattr(resp2, 'error', None):
+                    print("[delete_resumes] Error deleting by user_id")
+                else:
+                    deleted_ids.extend([r.get('id') for r in (resp2.data or []) if r.get('id')])
+            except Exception as e:
+                print("[delete_resumes] Exception deleting by user_id")
+
+        return {"deleted_ids": deleted_ids}
+
+    except Exception as e:
+        error_msg = str(e).lower()
+        if 'relation "public.resumes" does not exist' in error_msg or 'table' in error_msg and 'does not exist' in error_msg:
+            print("[delete_resumes] Resumes table doesn't exist yet")
+            return {"deleted_ids": [], "message": "Database not yet configured"}
+        else:
+            print("[delete_resumes] Error deleting resumes:", str(e))
+            raise HTTPException(status_code=500, detail="Failed to delete resumes")

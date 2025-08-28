@@ -86,32 +86,30 @@ def register_user(req: RegisterRequest):
     role = 'ADMIN'
     if req.organization_name:
         org_name = req.organization_name.strip()
-        try:
-            # Ensure the organizations row exists; create if missing.
-            org_check = supabase.table('organizations').select('id').eq('name', org_name).single().execute()
-            if not org_check.data:
-                insert_resp = supabase.table('organizations').insert({'name': org_name}).execute()
-                org_id = None
-                if getattr(insert_resp, 'data', None):
-                    org_id = insert_resp.data[0].get('id')
-            else:
-                org_id = org_check.data.get('id') if isinstance(org_check.data, dict) else (org_check.data[0].get('id') if org_check.data else None)
-        except Exception as e:
-            # If organizations table missing or other error, continue but log
-            print('[register_user] org upsert error:', e)
         # Always assign ADMIN when a user provides organization_name during signup
         profile_payload['organization_name'] = org_name
-        # attach organization_id when available
+
+        # Try to handle organization relationship, but don't fail if table doesn't exist
         try:
-            if 'org_id' in locals() and org_id:
-                profile_payload['organization_id'] = org_id
+            # Check if organizations table exists first
+            supabase.table('organizations').select('id').limit(1).execute()
+
+            # If we get here, the table exists, so proceed with organization logic
+            org_check = supabase.table('organizations').select('id').eq('name', org_name).execute()
+            if not org_check.data or len(org_check.data) == 0:
+                # Organization doesn't exist, create it
+                insert_resp = supabase.table('organizations').insert({'name': org_name}).execute()
+                if getattr(insert_resp, 'data', None) and len(insert_resp.data) > 0:
+                    org_id = insert_resp.data[0].get('id')
+                    profile_payload['organization_id'] = org_id
             else:
-                # try to load org id by name as fallback
-                lookup = supabase.table('organizations').select('id').eq('name', org_name).single().execute()
-                if getattr(lookup, 'data', None):
-                    profile_payload['organization_id'] = lookup.data.get('id') if isinstance(lookup.data, dict) else (lookup.data[0].get('id') if lookup.data else None)
-        except Exception:
-            pass
+                # Organization exists, get its ID
+                org_id = org_check.data[0].get('id')
+                profile_payload['organization_id'] = org_id
+        except Exception as e:
+            # If organizations table doesn't exist or any other error, just log and continue
+            # The user can still register and we'll set up organizations later
+            print('[register_user] Organization handling skipped (table may not exist):', str(e))
 
     profile_payload['role'] = role
 
