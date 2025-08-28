@@ -109,10 +109,10 @@ async def get_current_user(
 
 @router.post("/compare")
 async def compare_cvs_and_jd(
+    request: Request,
     jd: str = Form(...),
     files: List[UploadFile] = File(...),
     current_user: dict = Depends(get_current_user),
-    request: Request,
 ):
     try:
         analysis_result = resume_service.compare_cvs_to_jd(jd, files)
@@ -136,10 +136,10 @@ async def compare_cvs_and_jd(
 
 @router.post("/upload")
 async def upload_and_process_resume(
+    request: Request,
     file: UploadFile = File(...),
     supabase: Client = Depends(get_supabase_client),
     current_user: dict = Depends(get_current_user),
-    request: Request,
 ):
     try:
         user_id = current_user.get('id')
