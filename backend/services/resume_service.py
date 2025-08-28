@@ -183,3 +183,12 @@ Now, perform the full analysis on the following Job Description and Candidate CV
             raise HTTPException(status_code=500, detail="AI comparison failed.")
 
 resume_service = ResumeService()
+
+
+def compare_texts_to_jd(jd: str, cv_texts: list) -> str:
+    """Module-level wrapper for background tasks.
+
+    Delegates to the ResumeService instance to keep backward-compatible
+    imports for RQ task modules.
+    """
+    return resume_service.compare_texts_to_jd(jd, cv_texts)
