@@ -5,6 +5,7 @@ import { X, User, Lock, AlertTriangle } from 'lucide-react';
 import { API_ROUTES } from '../lib/api';
 import authFetch from '../lib/authFetch';
 import type { Profile } from '../hooks/useProfile';
+import { useProfile } from '../hooks/useProfile';
 import type { User as SupabaseUser } from '@supabase/supabase-js';
 
 // --- PROPS INTERFACES ---
