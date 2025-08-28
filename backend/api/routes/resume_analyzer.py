@@ -1,10 +1,11 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Form, Body, Query
+from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Form, Body, Query, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import List
 from supabase import create_client, Client
 from pydantic import BaseModel
 from config.settings import settings
 from services.resume_service import resume_service
+from services.utils.audit_logger import log_event
 from time import time
 import os
 import mimetypes
@@ -110,10 +111,23 @@ async def get_current_user(
 async def compare_cvs_and_jd(
     jd: str = Form(...),
     files: List[UploadFile] = File(...),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    request: Request | None = None,
 ):
     try:
         analysis_result = resume_service.compare_cvs_to_jd(jd, files)
+        try:
+            supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
+            log_event(
+                supabase,
+                event_type='cv_compare',
+                user_id=current_user.get('id'),
+                organization_name=None,
+                details={'files': [f.filename for f in files], 'jd_len': len(jd or '')},
+                request=request,
+            )
+        except Exception:
+            pass
         return {"analysis": analysis_result}
     except Exception as e:
         print(f"Error during CV comparison: {str(e)}")
@@ -124,7 +138,8 @@ async def compare_cvs_and_jd(
 async def upload_and_process_resume(
     file: UploadFile = File(...),
     supabase: Client = Depends(get_supabase_client),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    request: Request | None = None,
 ):
     try:
         user_id = current_user.get('id')
@@ -214,7 +229,19 @@ async def upload_and_process_resume(
         if not response or not getattr(response, 'data', None):
             raise HTTPException(status_code=500, detail="Failed to save resume metadata to the database.")
 
-        return response.data[0]
+        row = response.data[0]
+        try:
+            log_event(
+                supabase,
+                event_type='resume_upload',
+                user_id=current_user.get('id'),
+                organization_name=None,
+                details={'resume_id': row.get('id'), 'file_name': file.filename},
+                request=request,
+            )
+        except Exception:
+            pass
+        return row
 
     except Exception as e:
         print(f"AN ERROR OCCURRED DURING UPLOAD: {str(e)}")

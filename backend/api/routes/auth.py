@@ -1,9 +1,10 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, EmailStr
 import requests
 from supabase import create_client, Client
 from typing import Optional
 from config.settings import settings
+from services.utils.audit_logger import log_event
 
 router = APIRouter(prefix="", tags=["Auth"])
 
@@ -16,7 +17,7 @@ class RegisterRequest(BaseModel):
 
 
 @router.post('/register')
-def register_user(req: RegisterRequest):
+def register_user(req: RegisterRequest, request: Request):
     """Create a new Supabase auth user using the service role key, upsert profile and organization.
 
     Security: This endpoint uses the service role key to create a user. It must not return any secrets.
@@ -131,5 +132,18 @@ def register_user(req: RegisterRequest):
         'email': user.get('email'),
         'confirmed_at': user.get('confirmed_at') or user.get('email_confirmed_at') or None,
     }
+
+    try:
+        log_event(
+            supabase,
+            event_type='user_register',
+            user_id=user_id,
+            email=user.get('email'),
+            organization_name=profile_payload.get('organization_name'),
+            details={'role': role},
+            request=request,
+        )
+    except Exception:
+        pass
 
     return {'message': 'User created. Please check your email to confirm and then sign in.', 'user': user_info}

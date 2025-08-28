@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import JSONResponse
 import os
 import requests
@@ -10,6 +10,7 @@ from typing import List
 
 from config.settings import settings
 from .resume_analyzer import get_current_user, get_supabase_client
+from services.utils.audit_logger import log_event
 from time import time
 
 # Small in-memory cache to reduce repeated DB role lookups when the settings page polls
@@ -238,6 +239,7 @@ async def invite_user_by_email(
     request: InviteRequest,
     supabase: Client = Depends(get_supabase_admin_client),
     current_user: dict = Depends(get_current_user),
+    http_request: Request | None = None,
 ):
     invited_users = []
     errors = []
@@ -261,6 +263,18 @@ async def invite_user_by_email(
 
             response = supabase.auth.admin.invite_user_by_email(email, options)
             invited_users.append(response)
+            try:
+                log_event(
+                    supabase,
+                    event_type='invite_sent',
+                    user_id=current_user.get('id'),
+                    email=email,
+                    organization_name=org_name,
+                    details={'redirect_to': options.get('redirect_to')},
+                    request=http_request,
+                )
+            except Exception:
+                pass
         except Exception as e:
             errors.append({"email": email, "error": str(e)})
             print(f"INVITE ERROR for {email}: {str(e)}")
@@ -386,7 +400,7 @@ async def upsert_my_profile(request: ProfileUpsertRequest, current_user: dict = 
 
 
 @router.post('/account/delete')
-async def delete_my_account(current_user: dict = Depends(get_current_user), supabase: Client = Depends(get_supabase_admin_client)):
+async def delete_my_account(current_user: dict = Depends(get_current_user), supabase: Client = Depends(get_supabase_admin_client), http_request: Request | None = None):
     """Delete the current authenticated user's profile and auth user.
 
     If the user is an ADMIN and the last admin for their organization, delete the organization as well.
@@ -428,6 +442,17 @@ async def delete_my_account(current_user: dict = Depends(get_current_user), supa
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
+        try:
+            log_event(
+                supabase,
+                event_type='account_delete',
+                user_id=user_id,
+                organization_name=org_name,
+                details={'role': role},
+                request=http_request,
+            )
+        except Exception:
+            pass
         return { 'message': 'Account and profile deleted' }
     except HTTPException:
         raise

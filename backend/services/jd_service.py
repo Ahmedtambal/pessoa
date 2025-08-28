@@ -1,6 +1,8 @@
 from openai import OpenAI
 from api.models import JobDescriptionRequest
 from config.settings import settings
+from supabase import create_client
+from services.utils.audit_logger import log_event
 
 class JDService:
     def __init__(self):
@@ -66,7 +68,17 @@ Now, generate the job description based on the user's data below.
 
         # Ensure content is not None before returning
         try:
-            return completion.choices[0].message.content or ""
+            content = completion.choices[0].message.content or ""
+            try:
+                supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
+                log_event(
+                    supabase,
+                    event_type='jd_generate',
+                    details={'input_len': len(user_input or ''), 'output_len': len(content or '')},
+                )
+            except Exception:
+                pass
+            return content
         except Exception as e:
             print('[jd_service] error reading AI response:', repr(e))
             raise Exception('AI returned unexpected response for job description')
