@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+openai
+pydantic-settings
+python-docx  
+pypdf  
+supabase  
+python-multipart
+email-validator  
+requests==2.31.0

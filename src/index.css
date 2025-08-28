@@ -1,0 +1,81 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Background gradient */
+.app-background {
+  background: linear-gradient(135deg, 
+    #1A202C 0%, 
+    #2D3748 25%, 
+    #1A365D 50%, 
+    #553C9A 75%, 
+    #FF6B00 100%);
+  background-attachment: fixed;
+  min-height: 100vh;
+}
+
+/* Glassmorphism utility classes */
+@layer components {
+  .glass {
+    @apply bg-white/10 backdrop-blur-md border border-white/20 shadow-glass;
+  }
+  
+  .glass-light {
+    @apply bg-white/15 backdrop-blur-lg border border-white/30 shadow-glass;
+  }
+  
+  .glass-dark {
+    @apply bg-black/20 backdrop-blur-md border border-white/10 shadow-glass;
+  }
+  
+  .glass-card {
+    @apply glass rounded-xl p-6 hover:bg-white/15 transition-all duration-300;
+  }
+  
+  .glass-button {
+    @apply glass rounded-lg px-4 py-2 font-medium text-white hover:bg-white/20 transition-all duration-200 active:scale-95;
+  }
+  
+  .glass-input {
+    @apply glass rounded-lg px-4 py-3 text-white placeholder-white/60 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:bg-white/15 transition-all duration-200;
+  }
+  
+  /* --- THIS IS THE FIX --- */
+  /* This now uses the exact color you provided with a high opacity for a rich, solid look */
+  .glass-dropdown {
+    background-color: rgba(45, 55, 72, 0.95); /* This is the #2D3748 color with 95% opacity */
+    @apply backdrop-blur-lg border border-white/10 shadow-xl rounded-lg;
+  }
+
+  .primary-button {
+    @apply bg-primary hover:bg-primary-600 text-white font-semibold px-6 py-3 rounded-lg transition-all duration-200 shadow-lg hover:shadow-xl active:scale-95 animate-glow;
+  }
+  
+  .secondary-button {
+    @apply glass-button border-primary/30 text-primary hover:border-primary/50 hover:text-primary-400;
+  }
+
+  .result-card {
+    @apply bg-background/50 backdrop-blur-lg border border-white/10 rounded-xl p-8 shadow-inner;
+  }
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: rgba(255, 255, 255, 0.1); border-radius: 10px; }
+::-webkit-scrollbar-thumb { background: rgba(255, 107, 0, 0.5); border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255, 107, 0, 0.7); }
