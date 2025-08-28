@@ -1,4 +1,5 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Form, Body, Query, JSONResponse
+from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Form, Body, Query
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import List
 from supabase import create_client, Client
