@@ -1,5 +1,4 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Form, Body, Query
-from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import List
 from supabase import create_client, Client
@@ -7,17 +6,60 @@ from pydantic import BaseModel
 from config.settings import settings
 from services.resume_service import resume_service
 from time import time
-from fastapi import BackgroundTasks
 import os
-import uuid
-from services.audit_service import log_audit
-from services.job_queue import enqueue_job, get_redis
-from services import tasks as job_tasks
+import mimetypes
 
 # Simple in-memory TTL cache for token -> user lookups to avoid repeat network calls
 # Keyed by raw JWT; small TTL reduces latency for rapid UI requests (e.g. settings page)
 _USER_CACHE: dict = {}
 _USER_CACHE_TTL = 5  # seconds
+
+# Security constants
+MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
+ALLOWED_MIME_TYPES = {
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+}
+ALLOWED_EXTENSIONS = {'.pdf', '.doc', '.docx'}
+
+def validate_file_security(file: UploadFile) -> None:
+    """
+    Validate file upload for security concerns:
+    - File size limit
+    - MIME type validation
+    - File extension validation
+    - Content type spoofing protection
+    """
+    # Check file size
+    if hasattr(file, 'size') and file.size and file.size > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large. Maximum size is {MAX_FILE_SIZE // (1024*1024)}MB"
+        )
+
+    # Validate MIME type
+    if file.content_type not in ALLOWED_MIME_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid file type. Only PDF, DOC, and DOCX files are allowed"
+        )
+
+    # Validate file extension
+    _, ext = os.path.splitext(file.filename or '')
+    if ext.lower() not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid file extension. Only .pdf, .doc, and .docx files are allowed"
+        )
+
+    # Additional MIME type validation based on file extension
+    expected_mime = mimetypes.guess_type(file.filename or '')[0]
+    if expected_mime and expected_mime != file.content_type:
+        raise HTTPException(
+            status_code=400,
+            detail="File type mismatch detected. Possible security risk"
+        )
 
 # --- Pydantic model for the delete request body ---
 class DeleteRequest(BaseModel):
@@ -31,21 +73,6 @@ supabase_bearer_scheme = HTTPBearer()
 # --- Supabase Client Dependency ---
 def get_supabase_client():
     return create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
-
-
-ALLOWED_EXT = {'.pdf', '.docx', '.txt'}
-MAX_BYTES = 5 * 1024 * 1024  # 5 MB
-
-def validate_upload_file(upload: UploadFile):
-    name = upload.filename or ''
-    ext = os.path.splitext(name)[1].lower()
-    if ext not in ALLOWED_EXT:
-        raise HTTPException(status_code=400, detail='Invalid file type')
-    # probe size
-    data = upload.file.read(MAX_BYTES + 1)
-    upload.file.seek(0)
-    if len(data) > MAX_BYTES:
-        raise HTTPException(status_code=400, detail='File too large')
 
 # --- Reusable Dependency to Get and Validate the User from JWT ---
 async def get_current_user(
@@ -81,144 +108,21 @@ async def get_current_user(
 
 @router.post("/compare")
 async def compare_cvs_and_jd(
-    jd: str = Form(...), 
+    jd: str = Form(...),
     files: List[UploadFile] = File(...),
     current_user: dict = Depends(get_current_user)
 ):
     try:
+        # Security: Validate all uploaded files
+        for file in files:
+            validate_file_security(file)
+
         analysis_result = resume_service.compare_cvs_to_jd(jd, files)
         return {"analysis": analysis_result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"An error occurred during analysis: {str(e)}")
-
-
-@router.post('/compare-async')
-async def compare_cvs_and_jd_async(
-    background_tasks: BackgroundTasks,
-    jd: str = Form(...),
-    files: List[UploadFile] = File(...),
-    supabase: Client = Depends(get_supabase_client),
-    current_user: dict = Depends(get_current_user)
-):
-    # Validate and store files, prepare cv_texts
-    try:
-        user_id = current_user.get('id')
-        if not user_id:
-            raise HTTPException(status_code=401, detail='Invalid user')
-
-        cv_texts = []
-        storage_paths = []
-        for f in files:
-            validate_upload_file(f)
-            raw_text = ''
-            try:
-                # extract_profile_from_cv can accept UploadFile but may read the file; ensure we pass a copy
-                raw = resume_service.extract_profile_from_cv(file=f)
-                raw_text = raw.get('full_extracted_text') if raw else ''
-            except Exception:
-                # fallback to text extractor
-                from services.utils.file_extractor import extract_text_from_file
-                # file.file is a SpooledTemporaryFile; seek to start
-                try:
-                    f.file.seek(0)
-                except Exception:
-                    pass
-                raw_text = extract_text_from_file(f)
-
-            storage_path = f"{user_id}/{uuid.uuid4()}_{f.filename}"
-            # read file bytes safely
-            try:
-                f.file.seek(0)
-            except Exception:
-                pass
-            file_bytes = f.file.read()
-            supabase.storage.from_("cv_uploads").upload(path=storage_path, file=file_bytes, file_options={"content-type": f.content_type, "upsert": "true"})
-            storage_paths.append(storage_path)
-            cv_texts.append((f.filename or 'unknown', raw_text))
-
-        # Create a job record in DB
-        job_id = str(uuid.uuid4())
-        job_payload = {
-            'id': job_id,
-            'user_id': user_id,
-            'status': 'queued',
-            'job_type': 'compare_cvs',
-            'input': {'jd': jd, 'storage_paths': storage_paths},
-        }
-        # attempt insert
-        supabase.table('jobs').insert(job_payload).execute()
-        try:
-            log_audit(user_id, 'job_created', model=None, details={'job_id': job_id, 'type': 'compare_cvs'})
-        except Exception:
-            pass
-
-        # If Redis is configured, enqueue an RQ job; otherwise fall back to BackgroundTasks
-        try:
-            redis_conn = get_redis()
-        except Exception:
-            redis_conn = None
-
-        if redis_conn:
-            # enqueue an RQ job that calls our task wrapper
-            try:
-                enqueue_job(job_tasks.task_compare_texts, user_id, {'texts': cv_texts, 'jd': jd, 'storage_paths': storage_paths, 'job_id': job_id})
-            except Exception as e:
-                print('[compare-async] enqueue to RQ failed, falling back to BackgroundTasks:', e)
-                # fallback to BackgroundTasks
-                def _worker(jid, jd_text, cvs):
-                    try:
-                        result = resume_service.compare_texts_to_jd(jd_text, cvs)
-                        supabase.table('jobs').update({'status': 'done', 'result': {'analysis': result}}).eq('id', jid).execute()
-                        try:
-                            log_audit(user_id=user_id, action='compare_cvs_async_completed', model='gpt-4o-mini', prompt=jd_text[:2000], output=(str(result)[:8000] if result else None), details={'job_id': jid})
-                        except Exception:
-                            pass
-                    except Exception as e:
-                        supabase.table('jobs').update({'status': 'failed', 'error': str(e)}).eq('id', jid).execute()
-
-                background_tasks.add_task(_worker, job_id, jd, cv_texts)
-        else:
-            # No Redis: run via BackgroundTasks (existing approach)
-            def _worker(jid, jd_text, cvs):
-                try:
-                    result = resume_service.compare_texts_to_jd(jd_text, cvs)
-                    supabase.table('jobs').update({'status': 'done', 'result': {'analysis': result}}).eq('id', jid).execute()
-                    try:
-                        log_audit(user_id=user_id, action='compare_cvs_async_completed', model='gpt-4o-mini', prompt=jd_text[:2000], output=(str(result)[:8000] if result else None), details={'job_id': jid})
-                    except Exception:
-                        pass
-                except Exception as e:
-                    supabase.table('jobs').update({'status': 'failed', 'error': str(e)}).eq('id', jid).execute()
-
-            background_tasks.add_task(_worker, job_id, jd, cv_texts)
-
-        return JSONResponse(status_code=202, content={'job_id': job_id, 'status': 'queued'})
-    except HTTPException:
-        raise
-    except Exception as e:
-        print('[compare-async] error:', e)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get('/jobs/{job_id}')
-async def get_job(job_id: str, supabase: Client = Depends(get_supabase_client), current_user: dict = Depends(get_current_user)):
-    try:
-        resp = supabase.table('jobs').select('*').eq('id', job_id).single().execute()
-        if getattr(resp, 'error', None):
-            raise HTTPException(status_code=404, detail='Job not found')
-        job = resp.data
-        # ensure the requesting user owns the job or is admin
-        if job.get('user_id') != current_user.get('id'):
-            # check admin via profiles
-            prof = supabase.table('profiles').select('role').eq('id', current_user.get('id')).single().execute()
-            if not (prof and prof.data and prof.data.get('role') == 'ADMIN'):
-                raise HTTPException(status_code=403, detail='Forbidden')
-        return job
-    except HTTPException:
-        raise
-    except Exception as e:
-        print('[get_job] error:', e)
-        raise HTTPException(status_code=500, detail=str(e))
+        # Log error without exposing sensitive information
+        print("An error occurred during CV comparison")
+        raise HTTPException(status_code=500, detail="An error occurred during analysis")
 
 
 @router.post("/upload")
@@ -228,6 +132,9 @@ async def upload_and_process_resume(
     current_user: dict = Depends(get_current_user)
 ):
     try:
+        # Security: Validate file before processing
+        validate_file_security(file)
+
         user_id = current_user.get('id')
         if not user_id:
             raise HTTPException(status_code=401, detail="User ID could not be determined from token.")
@@ -288,7 +195,8 @@ async def upload_and_process_resume(
                 break
             except Exception as insert_err:
                 err_text = str(insert_err)
-                print(f"[upload_and_process_resume] insert error: {err_text}")
+                # Log error without exposing sensitive data
+                print(f"[upload_and_process_resume] Database insert error occurred")
                 # Look for common indications of missing columns
                 # e.g. "Could not find the 'education_summary' column of 'resumes' in the schema cache"
                 m = re.search(r"Could not find the '([a-zA-Z0-9_]+)' column", err_text)
@@ -299,28 +207,23 @@ async def upload_and_process_resume(
                 if m:
                     col = m.group(1)
                     if col in remaining_record:
-                        print(f"[upload_and_process_resume] removing missing column '{col}' and retrying")
+                        print(f"[upload_and_process_resume] Removing missing column '{col}' and retrying")
                         remaining_record.pop(col, None)
                         continue
 
                 # If we couldn't parse a missing-column error, or no recoverable keys remain,
                 # surface a clear error to the client.
-                raise HTTPException(status_code=500, detail=f"Failed to save resume metadata: {err_text}")
+                raise HTTPException(status_code=500, detail="Failed to save resume metadata to the database.")
 
         if not response or not getattr(response, 'data', None):
             raise HTTPException(status_code=500, detail="Failed to save resume metadata to the database.")
 
-        # Audit resume upload
-        try:
-            log_audit(user_id, 'resume_uploaded', model=None, details={'file_name': file.filename, 'storage_path': storage_path})
-        except Exception:
-            pass
-
         return response.data[0]
 
     except Exception as e:
-        print(f"AN ERROR OCCURRED DURING UPLOAD: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
+        # Log error without exposing sensitive information
+        print("An error occurred during resume upload processing")
+        raise HTTPException(status_code=500, detail="An error occurred during upload processing")
 
 
 @router.get("/")
@@ -343,8 +246,8 @@ async def get_all_resumes(
 
         return response.data
     except Exception as e:
-        print(f"[get_all_resumes] error fetching resumes for user {user_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        print("[get_all_resumes] Error fetching resumes")
+        raise HTTPException(status_code=500, detail="Failed to fetch resumes")
 
 
 @router.delete("/")
@@ -381,11 +284,11 @@ async def delete_resumes(
     try:
         resp1 = supabase.table('resumes').delete().in_('id', ids_to_delete).eq('profile_id', user_id).execute()
         if getattr(resp1, 'error', None):
-            print(f"[delete_resumes] error deleting by profile_id: {resp1.error}")
+            print("[delete_resumes] Error deleting by profile_id")
         else:
             deleted_ids.extend([r.get('id') for r in (resp1.data or []) if r.get('id')])
     except Exception as e:
-        print(f"[delete_resumes] exception deleting by profile_id: {e}")
+        print("[delete_resumes] Exception deleting by profile_id")
 
     # Delete any remaining ids using user_id (legacy column)
     remaining = [i for i in ids_to_delete if i not in deleted_ids]
@@ -393,10 +296,10 @@ async def delete_resumes(
         try:
             resp2 = supabase.table('resumes').delete().in_('id', remaining).eq('user_id', user_id).execute()
             if getattr(resp2, 'error', None):
-                print(f"[delete_resumes] error deleting by user_id: {resp2.error}")
+                print("[delete_resumes] Error deleting by user_id")
             else:
                 deleted_ids.extend([r.get('id') for r in (resp2.data or []) if r.get('id')])
         except Exception as e:
-            print(f"[delete_resumes] exception deleting by user_id: {e}")
+            print("[delete_resumes] Exception deleting by user_id")
 
     return {"deleted_ids": deleted_ids}

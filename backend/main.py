@@ -3,6 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 import os
+import time
+from collections import defaultdict
 
 from api.routes import jd_generator, resume_analyzer, admin, auth  # <-- IMPORT NEW AUTH ROUTER
 
@@ -69,7 +71,44 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
+# Rate Limiting Middleware
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app, requests_per_minute: int = 60):
+        super().__init__(app)
+        self.requests_per_minute = requests_per_minute
+        self.requests = defaultdict(list)
+
+    async def dispatch(self, request: Request, call_next):
+        # Get client IP
+        client_ip = request.client.host if request.client else "unknown"
+
+        # Clean old requests
+        current_time = time.time()
+        self.requests[client_ip] = [
+            req_time for req_time in self.requests[client_ip]
+            if current_time - req_time < 60
+        ]
+
+        # Check rate limit
+        if len(self.requests[client_ip]) >= self.requests_per_minute:
+            return JSONResponse(
+                {"detail": "Rate limit exceeded. Please try again later."},
+                status_code=429,
+                headers={
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Credentials': 'true'
+                }
+            )
+
+        # Add current request
+        self.requests[client_ip].append(current_time)
+
+        response = await call_next(request)
+        return response
+
+
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(RateLimitMiddleware)
 
 # --- Include API Routers ---
 app.include_router(jd_generator.router)

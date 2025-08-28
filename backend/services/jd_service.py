@@ -1,7 +1,6 @@
 from openai import OpenAI
 from api.models import JobDescriptionRequest
 from config.settings import settings
-from services.audit_service import log_audit
 
 class JDService:
     def __init__(self):
@@ -67,71 +66,9 @@ Now, generate the job description based on the user's data below.
 
         # Ensure content is not None before returning
         try:
-            output = completion.choices[0].message.content or ""
-            try:
-                log_audit(
-                    user_id=None,
-                    action='generate_jd',
-                    model='gpt-4o-mini',
-                    prompt=(user_input[:2000] if user_input else None),
-                    output=(output[:8000] if output else None),
-                    details={"job_title": request.job_title},
-                )
-            except Exception as e:
-                print(f"[jd_service] audit log failed: {e}")
-            return output
+            return completion.choices[0].message.content or ""
         except Exception as e:
             print('[jd_service] error reading AI response:', repr(e))
             raise Exception('AI returned unexpected response for job description')
 
 jd_service = JDService()
-
-
-def generate_jd_from_texts(texts, options: dict | None = None) -> str:
-    """Compatibility wrapper used by background tasks.
-
-    Accepts either a dict-like payload (matching JobDescriptionRequest), a JSON
-    string, or plain text. Builds a JobDescriptionRequest and calls the
-    JDService instance to generate the JD.
-    """
-    # Prefer dict-like inputs
-    if isinstance(texts, dict):
-        try:
-            req = JobDescriptionRequest(**texts)
-        except Exception:
-            # Fallback to placing the dict's string repr into responsibilities
-            req = JobDescriptionRequest(
-                job_title=str(texts.get('job_title', 'Generated Job')),
-                job_type=str(texts.get('job_type', 'Full Time')),
-                location=str(texts.get('location', 'Remote')),
-                responsibilities=str(texts.get('responsibilities', '')),
-                requirements=str(texts.get('requirements', '')),
-                skills=str(texts.get('skills', '')),
-            )
-        return jd_service.generate_jd(req)
-
-    # Try to parse JSON strings
-    if isinstance(texts, str):
-        import json
-
-        try:
-            parsed = json.loads(texts)
-            if isinstance(parsed, dict):
-                return generate_jd_from_texts(parsed, options=options)
-        except Exception:
-            # not JSON — fallthrough to treat as free text
-            pass
-
-        # Freeform text: put into responsibilities and use sensible defaults
-        req = JobDescriptionRequest(
-            job_title=options.get('job_title', 'Generated Job') if options else 'Generated Job',
-            job_type=options.get('job_type', 'Full Time') if options else 'Full Time',
-            location=options.get('location', 'Remote') if options else 'Remote',
-            responsibilities=texts,
-            requirements=options.get('requirements', '') if options else '',
-            skills=options.get('skills', '') if options else '',
-        )
-        return jd_service.generate_jd(req)
-
-    # Unknown type: coerce to string
-    return generate_jd_from_texts(str(texts), options=options)

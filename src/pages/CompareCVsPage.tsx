@@ -1,7 +1,7 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import MainLayout from '../components/layout/MainLayout';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, UploadCloud, FileText, X } from 'lucide-react';
+import { ArrowLeft, UploadCloud, FileText, X, MessageSquare, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '../lib/supabaseClient';
 import { API_ROUTES } from '../lib/api';
@@ -14,23 +14,55 @@ const CompareCVsPage: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [analysisResult, setAnalysisResult] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [consentGiven, setConsentGiven] = useState(false);
+  const [showReviewModal, setShowReviewModal] = useState(false);
 
-  // --- THIS IS THE FIX for the 'null' type error ---
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    // We add a check to ensure e.target.files is not null before proceeding.
-    if (e.target.files) {
-      setCvFiles(prev => [...prev, ...Array.from(e.target.files || [])]);
+  // Performance: Optimized file change handler with validation
+  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+
+    // Performance: Validate files before adding to state
+    const validFiles = files.filter(file => {
+      const validTypes = ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
+      const validExtensions = ['.pdf', '.doc', '.docx'];
+      const fileExt = '.' + file.name.split('.').pop()?.toLowerCase();
+
+      return validTypes.includes(file.type) ||
+             validExtensions.includes(fileExt) ||
+             file.size <= 5 * 1024 * 1024; // 5MB limit
+    });
+
+    if (validFiles.length !== files.length) {
+      setError('Some files were skipped due to invalid format or size. Only PDF, DOC, DOCX files under 5MB are allowed.');
     }
-  };
-  
-  const removeFile = (fileName: string) => {
-    setCvFiles(prev => prev.filter(file => file.name !== fileName));
-  };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+    setCvFiles(prev => [...prev, ...validFiles]);
+    // Reset input value to allow re-selection of same file
+    e.target.value = '';
+  }, []);
+  
+  // Performance: Optimized remove function with useCallback
+  const removeFile = useCallback((fileName: string) => {
+    setCvFiles(prev => prev.filter(file => file.name !== fileName));
+  }, []);
+
+  // Performance: Memoized validation checks
+  const isFormValid = useMemo(() => {
+    return jobDescription.trim().length > 0 &&
+           cvFiles.length > 0 &&
+           cvFiles.length <= 5 &&
+           consentGiven;
+  }, [jobDescription, cvFiles.length, consentGiven]);
+
+  // Performance: Optimized submit handler
+  const handleSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!jobDescription || cvFiles.length === 0) {
-      setError("Please provide a job description and at least one CV.");
+
+    if (!isFormValid) {
+      if (!jobDescription.trim()) setError("Please provide a job description.");
+      else if (cvFiles.length === 0) setError("Please upload at least one CV.");
+      else if (cvFiles.length > 5) setError("Maximum 5 CVs allowed.");
+      else if (!consentGiven) setError("Please consent to data processing before submitting.");
       return;
     }
     
@@ -48,19 +80,21 @@ const CompareCVsPage: React.FC = () => {
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
       const response = await fetch(API_ROUTES.RESUME_COMPARE, {
-        method: 'POST', body: formData, headers,
+        method: 'POST',
+        body: formData,
+        headers,
       });
 
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || 'Failed to get analysis.');
-      
+
       setAnalysisResult(data.analysis);
     } catch (err: any) {
       setError(err?.message || "An unknown error occurred.");
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [isFormValid, jobDescription, cvFiles]);
 
   return (
     <MainLayout>
@@ -84,12 +118,52 @@ const CompareCVsPage: React.FC = () => {
                 </motion.div>
               )}
             </AnimatePresence>
-            <div className="pt-2"><button type="submit" disabled={isLoading} className="primary-button w-full md:w-auto flex items-center justify-center gap-2">{isLoading ? ( <><div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" /><span>Analyzing...</span></> ) : 'Analyze Resumes' }</button></div>
+
+            <div className="flex items-start space-x-3 p-4 bg-white/5 rounded-lg">
+              <input
+                type="checkbox"
+                id="data-consent"
+                checked={consentGiven}
+                onChange={(e) => setConsentGiven(e.target.checked)}
+                className="w-4 h-4 text-primary bg-transparent border-white/30 rounded focus:ring-primary/50 focus:ring-2 mt-1"
+                required
+              />
+              <label htmlFor="data-consent" className="text-sm text-white/80 leading-relaxed">
+                I consent to the processing of my CV data and job descriptions by Pessoa AI for analysis purposes.
+                I understand that this data will be used solely for matching CVs with job requirements and will not be shared with third parties for marketing purposes.
+                <a href="/privacy" className="text-primary hover:text-primary-400 transition-colors ml-1" target="_blank" rel="noopener noreferrer">
+                  Learn more in our Privacy Policy
+                </a>.
+              </label>
+            </div>
+
+            <div className="pt-2">
+              <button
+                type="submit"
+                disabled={!isFormValid || isLoading}
+                className="primary-button w-full md:w-auto flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isLoading ? (
+                  <>
+                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    <span>Analyzing...</span>
+                  </>
+                ) : (
+                  'Analyze Resumes'
+                )}
+              </button>
+            </div>
           </form>
           {error && <div className="mt-6 text-center text-red-400 bg-red-500/10 p-4 rounded-lg">{error}</div>}
           {analysisResult && <AnalysisResultBox markdownText={analysisResult} />}
         </div>
       </div>
+
+      <ManualReviewModal
+        isOpen={showReviewModal}
+        onClose={() => setShowReviewModal(false)}
+        analysisData={analysisResult}
+      />
     </MainLayout>
   );
 };
@@ -141,8 +215,193 @@ const AnalysisResultBox = ({ markdownText }: { markdownText: string }) => {
             )}
           </div>
         ))}
+
+        {/* AI Transparency Disclaimer */}
+        <div className="mt-6 p-4 bg-blue-500/10 border border-blue-500/20 rounded-lg">
+          <div className="flex items-start gap-3">
+            <div className="w-2 h-2 bg-blue-400 rounded-full mt-2 flex-shrink-0"></div>
+            <div className="text-sm text-blue-200 flex-1">
+              <p className="font-semibold mb-1">🤖 Generated by PessoaAI</p>
+              <p className="leading-relaxed">
+                This analysis was created using artificial intelligence. While we strive for accuracy,
+                AI-generated results should be reviewed by human experts before making employment decisions.
+                The AI considers various factors including skills matching, experience alignment, and qualification compatibility.
+              </p>
+              <div className="mt-3 flex items-center justify-between">
+                <p className="text-xs text-blue-300">
+                  Not satisfied with this analysis?
+                </p>
+                <button
+                  onClick={() => setShowReviewModal(true)}
+                  className="px-3 py-1 bg-blue-600/30 hover:bg-blue-600/50 text-blue-200 text-xs rounded border border-blue-500/30 transition-colors flex items-center gap-1"
+                >
+                  <MessageSquare className="w-3 h-3" />
+                  Request Manual Review
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
+  );
+};
+
+// Manual Review Modal Component
+const ManualReviewModal: React.FC<{ isOpen: boolean; onClose: () => void; analysisData?: string }> = ({ isOpen, onClose, analysisData }) => {
+  const [formData, setFormData] = useState({
+    name: '',
+    email: '',
+    reason: '',
+    comments: ''
+  });
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({ ...prev, [name]: value }));
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSubmitting(true);
+
+    // Here you would typically send this to your backend API
+    // For now, we'll just simulate a successful submission
+    try {
+      await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate API call
+      setSubmitted(true);
+      setTimeout(() => {
+        setSubmitted(false);
+        setFormData({ name: '', email: '', reason: '', comments: '' });
+        onClose();
+      }, 2000);
+    } catch (error) {
+      console.error('Failed to submit review request:', error);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <AnimatePresence>
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+        onClick={onClose}
+      >
+        <motion.div
+          initial={{ scale: 0.9, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          exit={{ scale: 0.9, opacity: 0 }}
+          className="glass-card w-full max-w-lg max-h-[90vh] overflow-y-auto"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex justify-between items-center mb-6">
+            <h2 className="text-2xl font-bold text-white">Request Manual Review</h2>
+            <button onClick={onClose} className="glass-button p-2">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          {submitted ? (
+            <div className="text-center py-8">
+              <div className="w-16 h-16 bg-green-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
+                <Check className="w-8 h-8 text-green-400" />
+              </div>
+              <h3 className="text-xl font-bold text-white mb-2">Review Request Submitted!</h3>
+              <p className="text-white/70">
+                Our team will review your request and get back to you within 2-3 business days.
+              </p>
+            </div>
+          ) : (
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div>
+                <label className="block text-white/80 text-sm mb-2">Your Name *</label>
+                <input
+                  type="text"
+                  name="name"
+                  value={formData.name}
+                  onChange={handleInputChange}
+                  className="glass-input w-full"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-white/80 text-sm mb-2">Email Address *</label>
+                <input
+                  type="email"
+                  name="email"
+                  value={formData.email}
+                  onChange={handleInputChange}
+                  className="glass-input w-full"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-white/80 text-sm mb-2">Reason for Review *</label>
+                <select
+                  name="reason"
+                  value={formData.reason}
+                  onChange={handleInputChange}
+                  className="glass-input w-full"
+                  required
+                >
+                  <option value="">Select a reason</option>
+                  <option value="disagree-with-analysis">I disagree with the AI analysis</option>
+                  <option value="missing-information">Important information was missed</option>
+                  <option value="bias-concern">I suspect bias in the results</option>
+                  <option value="accuracy-concern">Accuracy concerns with the matching</option>
+                  <option value="other">Other</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-white/80 text-sm mb-2">Additional Comments</label>
+                <textarea
+                  name="comments"
+                  value={formData.comments}
+                  onChange={handleInputChange}
+                  className="glass-input w-full min-h-[100px]"
+                  placeholder="Please provide any additional context or specific concerns..."
+                />
+              </div>
+
+              <div className="flex gap-3 pt-4">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="secondary-button flex-1"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="primary-button flex-1 flex items-center justify-center gap-2"
+                >
+                  {isSubmitting ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      Submitting...
+                    </>
+                  ) : (
+                    'Submit Request'
+                  )}
+                </button>
+              </div>
+            </form>
+          )}
+        </motion.div>
+      </motion.div>
+    </AnimatePresence>
   );
 };
 

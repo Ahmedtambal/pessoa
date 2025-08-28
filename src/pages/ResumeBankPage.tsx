@@ -29,6 +29,7 @@ const ResumeBankPage: React.FC = () => {
   const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState(''); // State for search input
+  const [uploadConsentGiven, setUploadConsentGiven] = useState(false);
 
   const fetchResumes = useCallback(async () => {
     setLoading(true);
@@ -197,6 +198,7 @@ const UploadModal: React.FC<{ onClose: () => void; onUploadComplete: () => void 
   const [uploading, setUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<{ [key: string]: 'uploading' | 'success' | 'error' }>({});
   const [error, setError] = useState<string | null>(null);
+  const [consentGiven, setConsentGiven] = useState(false);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) setFiles(Array.from(e.target.files));
@@ -204,6 +206,10 @@ const UploadModal: React.FC<{ onClose: () => void; onUploadComplete: () => void 
 
   const handleUpload = async () => {
     if (files.length === 0) return;
+    if (!consentGiven) {
+      setError("Please consent to data processing before uploading.");
+      return;
+    }
     const { data: { session }, error: sessionError } = await supabase.auth.getSession();
     if (sessionError || !session) {
       setError("Authentication error. Please log in again.");
@@ -270,7 +276,24 @@ const UploadModal: React.FC<{ onClose: () => void; onUploadComplete: () => void 
 
           {error && <div className="text-red-400 text-sm text-center">{error}</div>}
 
-          <button className="primary-button w-full" onClick={handleUpload} disabled={uploading || files.length === 0}>
+          <div className="flex items-start space-x-3 p-3 bg-white/5 rounded-lg">
+            <input
+              type="checkbox"
+              id="upload-consent"
+              checked={consentGiven}
+              onChange={(e) => setConsentGiven(e.target.checked)}
+              className="w-4 h-4 text-primary bg-transparent border-white/30 rounded focus:ring-primary/50 focus:ring-2 mt-1"
+              required
+            />
+            <label htmlFor="upload-consent" className="text-xs text-white/70 leading-relaxed">
+              I consent to the processing of my CV data by Pessoa AI for storage and analysis purposes.
+              <a href="/privacy" className="text-primary hover:text-primary-400 transition-colors ml-1" target="_blank" rel="noopener noreferrer">
+                Privacy Policy
+              </a>.
+            </label>
+          </div>
+
+          <button className="primary-button w-full" onClick={handleUpload} disabled={uploading || files.length === 0 || !consentGiven}>
             {uploading ? 'Processing...' : `Upload ${files.length} File(s)`}
           </button>
         </div>

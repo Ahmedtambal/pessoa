@@ -13,7 +13,6 @@ class RegisterRequest(BaseModel):
     password: str
     full_name: Optional[str] = None
     organization_name: Optional[str] = None
-    tos_accepted: Optional[bool] = False
 
 
 @router.post('/register')
@@ -23,9 +22,15 @@ def register_user(req: RegisterRequest):
     Security: This endpoint uses the service role key to create a user. It must not return any secrets.
     The endpoint will NOT sign the user in; client must sign in after email confirmation.
     """
-    # Basic validation
-    if len(req.password) < 6:
-        raise HTTPException(status_code=400, detail='Password must be at least 6 characters')
+    # Enhanced password validation for security
+    if len(req.password) < 12:
+        raise HTTPException(status_code=400, detail='Password must be at least 12 characters long')
+    if not any(char.isupper() for char in req.password):
+        raise HTTPException(status_code=400, detail='Password must contain at least one uppercase letter')
+    if not any(char.islower() for char in req.password):
+        raise HTTPException(status_code=400, detail='Password must contain at least one lowercase letter')
+    if not any(char.isdigit() for char in req.password):
+        raise HTTPException(status_code=400, detail='Password must contain at least one number')
 
     # 1) Create auth user via Supabase Admin REST API
     url = f"{settings.SUPABASE_URL}/auth/v1/admin/users"
@@ -51,10 +56,14 @@ def register_user(req: RegisterRequest):
     except Exception:
         raise HTTPException(status_code=500, detail='Unexpected response from auth provider')
 
-    # Log the raw response from Supabase admin API for debugging (no secrets)
+    # Log only non-sensitive information for security
     try:
-        print('[register_user] supabase admin response status:', resp.status_code)
-        print('[register_user] supabase admin response body:', data)
+        print(f'[register_user] supabase admin response status: {resp.status_code}')
+        # Only log success/failure, not sensitive data
+        if resp.ok:
+            print('[register_user] User created successfully')
+        else:
+            print('[register_user] User creation failed - check error details')
     except Exception:
         pass
 
@@ -105,13 +114,6 @@ def register_user(req: RegisterRequest):
             pass
 
     profile_payload['role'] = role
-    # store tos acceptance timestamp if provided
-    try:
-        if getattr(req, 'tos_accepted', False):
-            import datetime
-            profile_payload['tos_accepted_at'] = datetime.datetime.utcnow().isoformat()
-    except Exception:
-        pass
 
     try:
         supabase.table('profiles').upsert(profile_payload).execute()
