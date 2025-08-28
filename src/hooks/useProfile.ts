@@ -18,19 +18,51 @@ export const useProfile = () => {
   const fetchProfile = useCallback(async () => {
     // Note: We don't set loading to true here on re-fetches to avoid screen flickers
     const { data: { session } } = await supabase.auth.getSession();
-    
+
     if (session?.user) {
       setUser(session.user);
-      
+
       const { data: profileData, error } = await supabase
         .from('profiles')
         .select('*')
         .eq('id', session.user.id)
         .single();
-        
+
       if (error) {
-        console.error('Error fetching profile:', error);
-        setProfile(null);
+        console.log('Profile not found, this is normal for new users:', error.message);
+
+        // Try to create a profile from user metadata if it doesn't exist
+        const userMetadata = session.user.user_metadata || {};
+        const { error: insertError } = await supabase
+          .from('profiles')
+          .insert({
+            id: session.user.id,
+            full_name: userMetadata.full_name || userMetadata.name || '',
+            organization_name: userMetadata.organization_name || '',
+            role: userMetadata.role || 'MEMBER'
+          })
+          .select()
+          .single();
+
+        if (insertError) {
+          console.error('Error creating profile:', insertError);
+          setProfile(null);
+        } else {
+          console.log('Profile created successfully');
+          // Fetch the newly created profile
+          const { data: newProfileData, error: refetchError } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', session.user.id)
+            .single();
+
+          if (refetchError) {
+            console.error('Error refetching profile:', refetchError);
+            setProfile(null);
+          } else {
+            setProfile(newProfileData);
+          }
+        }
       } else {
         setProfile(profileData);
       }

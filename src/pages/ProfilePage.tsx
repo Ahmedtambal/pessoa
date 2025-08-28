@@ -10,13 +10,13 @@ import type { User as SupabaseUser } from '@supabase/supabase-js';
 // --- PROPS INTERFACES ---
 interface ProfilePageProps {
   user: SupabaseUser;
-  profile: Profile;
+  profile: Profile | null;
   onClose: () => void;
   onProfileUpdate: () => void;
 }
 interface ProfileSettingsProps {
     user: SupabaseUser;
-    profile: Profile;
+    profile: Profile | null;
     onUpdate: () => void;
 }
 interface DangerZoneProps {
@@ -35,15 +35,15 @@ const ProfilePage = ({ user, profile, onClose, onProfileUpdate }: ProfilePagePro
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-      <motion.div 
-        initial={{ scale: 0.95, y: 20 }} 
-        animate={{ scale: 1, y: 0 }} 
-        exit={{ scale: 0.95, y: 20 }} 
+      <motion.div
+        initial={{ scale: 0.95, y: 20 }}
+        animate={{ scale: 1, y: 0 }}
+        exit={{ scale: 0.95, y: 20 }}
         transition={{ duration: 0.2 }}
         className="glass-card w-full max-w-4xl h-auto max-h-[90vh] md:h-auto md:max-h-[700px] relative flex flex-col md:flex-row overflow-hidden"
       >
         <button onClick={onClose} className="absolute top-4 right-4 glass-button p-2 z-10"><X className="w-4 h-4" /></button>
-        
+
         {/* --- Left Column: Navigation Tabs --- */}
         <div className="w-full md:w-1/3 border-b md:border-b-0 md:border-r border-white/10 p-6 flex-shrink-0">
           <h2 className="text-xl font-bold text-white mb-8">Account Settings</h2>
@@ -73,20 +73,54 @@ const ProfilePage = ({ user, profile, onClose, onProfileUpdate }: ProfilePagePro
 
 // --- Sub-component for Profile Details ---
 const ProfileSettings = ({ profile, user, onUpdate }: ProfileSettingsProps) => {
-  const [fullName, setFullName] = useState(profile.full_name || '');
-  const [orgName, setOrgName] = useState(profile.organization_name || '');
+  // Handle null profile by creating a default profile object
+  const defaultProfile: Profile = {
+    id: user.id,
+    full_name: '',
+    organization_name: '',
+    role: 'MEMBER'
+  };
+
+  const currentProfile = profile || defaultProfile;
+  const [fullName, setFullName] = useState(currentProfile.full_name || '');
+  const [orgName, setOrgName] = useState(currentProfile.organization_name || '');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{type: 'success' | 'error', text: string} | null>(null);
 
   const handleUpdate = async () => {
     setLoading(true); setMessage(null);
-    const { error } = await supabase.from('profiles').update({ full_name: fullName, organization_name: orgName }).eq('id', user.id);
-    if (!error) {
+
+    try {
+      // If profile is null, we need to create it first
+      if (!profile) {
+        const { error: insertError } = await supabase.from('profiles').insert({
+          id: user.id,
+          full_name: fullName,
+          organization_name: orgName,
+          role: 'MEMBER'
+        });
+
+        if (insertError) {
+          throw insertError;
+        }
+      } else {
+        // Update existing profile
+        const { error: updateError } = await supabase.from('profiles').update({
+          full_name: fullName,
+          organization_name: orgName
+        }).eq('id', user.id);
+
+        if (updateError) {
+          throw updateError;
+        }
+      }
+
       setMessage({ type: 'success', text: 'Profile updated successfully!'});
       onUpdate();
-    } else {
-      setMessage({ type: 'error', text: error.message });
+    } catch (error: any) {
+      setMessage({ type: 'error', text: error.message || 'Failed to update profile' });
     }
+
     setLoading(false);
   };
 
@@ -106,7 +140,30 @@ const ProfileSettings = ({ profile, user, onUpdate }: ProfileSettingsProps) => {
           <label className="text-sm font-medium text-white/70 block mb-2">Email Address</label>
           <input value={user.email} type="email" disabled className="glass-input w-full bg-white/5 cursor-not-allowed" />
         </div>
-        <button onClick={handleUpdate} disabled={loading} className="primary-button w-40 flex justify-center">{loading ? <div className="w-5 h-5 border-2 border-t-transparent rounded-full animate-spin"/> : 'Save Changes'}</button>
+
+        {/* Debug/Admin Access Section - Remove this after fixing the issue */}
+        {!profile && (
+          <div className="border border-yellow-500/30 rounded-lg p-4 bg-yellow-500/10">
+            <h4 className="text-yellow-400 font-semibold mb-2">⚠️ Profile Setup Required</h4>
+            <p className="text-yellow-200 text-sm mb-3">
+              Your profile record is missing from the database. This is preventing admin access and profile functionality.
+            </p>
+            <button
+              onClick={handleUpdate}
+              disabled={loading}
+              className="primary-button w-full flex justify-center"
+            >
+              {loading ? <div className="w-5 h-5 border-2 border-t-transparent rounded-full animate-spin"/> : 'Create Profile & Save Changes'}
+            </button>
+          </div>
+        )}
+
+        {profile && (
+          <button onClick={handleUpdate} disabled={loading} className="primary-button w-40 flex justify-center">
+            {loading ? <div className="w-5 h-5 border-2 border-t-transparent rounded-full animate-spin"/> : 'Save Changes'}
+          </button>
+        )}
+
         {message && <p className={`text-sm ${message.type === 'success' ? 'text-green-400' : 'text-red-400'}`}>{message.text}</p>}
       </div>
     </div>
@@ -157,7 +214,8 @@ const PasswordSettings = () => {
 const DangerZone = ({ onClose }: DangerZoneProps) => {
   const [deleteConfirm, setDeleteConfirm] = useState('');
   const [loading, setLoading] = useState(false);
-  
+  const { profile } = useProfile();
+
   const handleDelete = async () => {
       setLoading(true);
       const { data: { session } } = await supabase.auth.getSession();
@@ -172,12 +230,12 @@ const DangerZone = ({ onClose }: DangerZoneProps) => {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' }
         });
-        
+
         const result = await response.json();
         if (!response.ok) {
           throw new Error(result.detail || "Failed to delete account.");
         }
-        
+
         alert(result.message || "Account deletion successful. You will now be logged out.");
         await supabase.auth.signOut();
         window.location.href = '/login';

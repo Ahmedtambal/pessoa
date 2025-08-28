@@ -101,7 +101,13 @@ const Sidebar = ({ onProfileClick }: SidebarProps) => {
                       <p className="text-sm font-medium text-white truncate">
                         {loading ? 'Loading...' : (profile?.full_name || user?.email)}
                       </p>
-                      <p className="text-xs text-white/60 truncate">{loading ? '...' : profile?.organization_name || ''}</p>
+                      <p className="text-xs text-white/60 truncate">
+                        {loading ? '...' : (
+                          profile ?
+                            `${profile.organization_name || 'No Organization'} • ${profile.role}` :
+                            'Profile not loaded'
+                        )}
+                      </p>
                     </div>
                   </div>
                 </div>

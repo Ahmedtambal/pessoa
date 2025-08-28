@@ -29,10 +29,10 @@ const MainLayout = ({ children }: { children: React.ReactNode }) => {
         </div>
       </main>
       <AnimatePresence>
-        {isProfileOpen && user && profile && (
-          <ProfilePage 
-            user={user} 
-            profile={profile} 
+        {isProfileOpen && user && (
+          <ProfilePage
+            user={user}
+            profile={profile}
             onClose={() => setIsProfileOpen(false)}
             onProfileUpdate={refreshProfile}
           />
