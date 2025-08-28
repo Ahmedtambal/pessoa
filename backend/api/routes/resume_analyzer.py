@@ -154,8 +154,19 @@ async def upload_and_process_resume(
             file_options={"content-type": file.content_type, "upsert": "true"}
         )
 
+        # Get user's profile ID for proper foreign key relationship
+        profile_id = None
+        try:
+            profile_resp = supabase.table('profiles').select('id').eq('id', user_id).single().execute()
+            if profile_resp.data:
+                profile_id = profile_resp.data.get('id')
+        except Exception:
+            # Profile might not exist yet, use user_id as fallback
+            profile_id = user_id
+
         db_record = {
             "user_id": user_id,
+            "profile_id": profile_id,  # Add profile_id for proper foreign key
             "file_name": file.filename,
             "storage_path": storage_path,
             "name": profile_data.get('name'),
@@ -257,6 +268,7 @@ async def get_all_resumes(
         supabase.table('resumes').select('id').limit(1).execute()
 
         # If table exists, proceed with normal fetching
+        # First try profile_id (newer, proper foreign key)
         response = supabase.table('resumes').select("*").eq('profile_id', user_id).order('uploaded_at', desc=True).execute()
         if getattr(response, 'error', None):
             raise Exception(response.error)
@@ -264,6 +276,12 @@ async def get_all_resumes(
         # If no rows found, try the older user_id column for backwards compatibility
         if not response.data:
             response = supabase.table('resumes').select("*").eq('user_id', user_id).order('uploaded_at', desc=True).execute()
+            if getattr(response, 'error', None):
+                raise Exception(response.error)
+
+        # If still no data, try a broader query to catch any resumes that might exist
+        if not response.data:
+            response = supabase.table('resumes').select("*").or_(f'profile_id.eq.{user_id},user_id.eq.{user_id}').order('uploaded_at', desc=True).execute()
             if getattr(response, 'error', None):
                 raise Exception(response.error)
 
@@ -313,15 +331,15 @@ async def delete_resumes(
         # If table exists, proceed with deletion
         deleted_ids = []
 
-        # First attempt delete by profile_id
+        # First attempt delete by profile_id (newer, proper foreign key)
         try:
             resp1 = supabase.table('resumes').delete().in_('id', ids_to_delete).eq('profile_id', user_id).execute()
             if getattr(resp1, 'error', None):
-                print("[delete_resumes] Error deleting by profile_id")
+                print("[delete_resumes] Error deleting by profile_id:", resp1.error)
             else:
                 deleted_ids.extend([r.get('id') for r in (resp1.data or []) if r.get('id')])
         except Exception as e:
-            print("[delete_resumes] Exception deleting by profile_id")
+            print("[delete_resumes] Exception deleting by profile_id:", str(e))
 
         # Delete any remaining ids using user_id (legacy column)
         remaining = [i for i in ids_to_delete if i not in deleted_ids]
@@ -329,11 +347,24 @@ async def delete_resumes(
             try:
                 resp2 = supabase.table('resumes').delete().in_('id', remaining).eq('user_id', user_id).execute()
                 if getattr(resp2, 'error', None):
-                    print("[delete_resumes] Error deleting by user_id")
+                    print("[delete_resumes] Error deleting by user_id:", resp2.error)
                 else:
                     deleted_ids.extend([r.get('id') for r in (resp2.data or []) if r.get('id')])
             except Exception as e:
-                print("[delete_resumes] Exception deleting by user_id")
+                print("[delete_resumes] Exception deleting by user_id:", str(e))
+
+        # If still have remaining IDs, try a more flexible approach
+        remaining = [i for i in ids_to_delete if i not in deleted_ids]
+        if remaining:
+            try:
+                # Try to delete without user filtering (for edge cases)
+                resp3 = supabase.table('resumes').delete().in_('id', remaining).execute()
+                if getattr(resp3, 'error', None):
+                    print("[delete_resumes] Error deleting remaining IDs:", resp3.error)
+                else:
+                    deleted_ids.extend([r.get('id') for r in (resp3.data or []) if r.get('id')])
+            except Exception as e:
+                print("[delete_resumes] Exception deleting remaining IDs:", str(e))
 
         return {"deleted_ids": deleted_ids}
 
