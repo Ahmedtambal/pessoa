@@ -236,10 +236,10 @@ async def delete_profile(user_id: str, supabase: Client = Depends(get_supabase_a
 
 @router.post("/invite", dependencies=[Depends(is_admin_user)])
 async def invite_user_by_email(
+    http_request: Request,
     request: InviteRequest,
     supabase: Client = Depends(get_supabase_admin_client),
     current_user: dict = Depends(get_current_user),
-    http_request: Request,
 ):
     invited_users = []
     errors = []
@@ -400,7 +400,7 @@ async def upsert_my_profile(request: ProfileUpsertRequest, current_user: dict = 
 
 
 @router.post('/account/delete')
-async def delete_my_account(current_user: dict = Depends(get_current_user), supabase: Client = Depends(get_supabase_admin_client), http_request: Request):
+async def delete_my_account(http_request: Request, current_user: dict = Depends(get_current_user), supabase: Client = Depends(get_supabase_admin_client)):
     """Delete the current authenticated user's profile and auth user.
 
     If the user is an ADMIN and the last admin for their organization, delete the organization as well.
