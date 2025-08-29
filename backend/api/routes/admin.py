@@ -7,6 +7,8 @@ from supabase import create_client, Client
 # We are only importing BaseModel now, not EmailStr
 from pydantic import BaseModel
 from typing import List
+import secrets
+import string
 
 from config.settings import settings
 from .resume_analyzer import get_current_user, get_supabase_client
@@ -30,6 +32,17 @@ class InviteRequest(BaseModel):
 
 class DeleteOrgRequest(BaseModel):
     organization_name: str
+class CreateInviteRequest(BaseModel):
+    email: str
+    role: str | None = 'MEMBER'
+    expires_in_hours: int | None = 168
+
+class InviteOut(BaseModel):
+    code: str
+    email: str
+    role: str
+    organization_name: str | None = None
+
 
 router = APIRouter(prefix="/admin", tags=["Admin Management"])
 
@@ -75,6 +88,61 @@ async def is_admin_user(current_user: dict = Depends(get_current_user), supabase
     if role != 'ADMIN':
         raise HTTPException(status_code=403, detail="Forbidden: Not an admin")
     return current_user
+def _generate_invite_code(length: int = 8) -> str:
+    alphabet = string.ascii_uppercase + string.digits
+    return ''.join(secrets.choice(alphabet) for _ in range(length))
+
+@router.post('/invites', response_model=InviteOut, dependencies=[Depends(is_admin_user)])
+async def create_invite(req: CreateInviteRequest, supabase: Client = Depends(get_supabase_admin_client), current_user: dict = Depends(get_current_user)):
+    # Determine inviter's org
+    org_name = None
+    try:
+        prof = supabase.table('profiles').select('organization_name, organization_id').eq('id', current_user.get('id')).single().execute()
+        if prof and prof.data:
+            org_name = prof.data.get('organization_name')
+            org_id = prof.data.get('organization_id')
+    except Exception:
+        org_name = None
+        org_id = None
+
+    code = _generate_invite_code()
+    payload = {
+        'code': code,
+        'email': req.email,
+        'role': req.role or 'MEMBER',
+        'organization_name': org_name,
+        'organization_id': org_id,
+        'created_by': current_user.get('id'),
+    }
+    if req.expires_in_hours and req.expires_in_hours > 0:
+        try:
+            from datetime import datetime, timedelta, timezone
+            payload['expires_at'] = (datetime.now(timezone.utc) + timedelta(hours=req.expires_in_hours)).isoformat()
+        except Exception:
+            pass
+
+    resp = supabase.table('invites').insert(payload).execute()
+    if getattr(resp, 'error', None):
+        raise HTTPException(status_code=500, detail=str(resp.error))
+    return InviteOut(code=code, email=req.email, role=payload['role'], organization_name=org_name)
+
+@router.get('/invites', dependencies=[Depends(is_admin_user)])
+async def list_invites(supabase: Client = Depends(get_supabase_admin_client)):
+    resp = supabase.table('invites').select('*').order('created_at', desc=True).execute()
+    if getattr(resp, 'error', None):
+        raise HTTPException(status_code=500, detail=str(resp.error))
+    return resp.data or []
+
+class RevokeInviteRequest(BaseModel):
+    code: str
+
+@router.post('/invites/revoke', dependencies=[Depends(is_admin_user)])
+async def revoke_invite(req: RevokeInviteRequest, supabase: Client = Depends(get_supabase_admin_client)):
+    resp = supabase.table('invites').update({'status': 'REVOKED'}).eq('code', req.code).eq('status', 'PENDING').execute()
+    if getattr(resp, 'error', None):
+        raise HTTPException(status_code=500, detail=str(resp.error))
+    return {'message': 'Invite revoked'}
+
 
 
 @router.get("/users", dependencies=[Depends(is_admin_user)])

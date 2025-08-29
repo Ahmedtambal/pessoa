@@ -12,7 +12,10 @@ if (typeof window !== 'undefined' && window?.console && import.meta.env.DEV) {
 
 export const API_ROUTES = {
   ADMIN_USERS: `${BASE_URL}/admin/users`,
-  ADMIN_INVITE: `${BASE_URL}/admin/invite`,
+  // New whitelist-based invites
+  ADMIN_INVITES_CREATE: `${BASE_URL}/admin/invites`,
+  ADMIN_INVITES_LIST: `${BASE_URL}/admin/invites`,
+  ADMIN_INVITES_REVOKE: `${BASE_URL}/admin/invites/revoke`,
   ADMIN_DELETE_ORG: `${BASE_URL}/admin/organization/delete`,
   ADMIN_UPDATE_USER: (userId: string) => `${BASE_URL}/admin/users/${userId}`,
   ADMIN_DELETE_USER: (userId: string) => `${BASE_URL}/admin/users/${userId}`,
@@ -26,4 +29,5 @@ export const API_ROUTES = {
 
   GENERATE_JD: `${BASE_URL}/jd/generate`,
   REGISTER: `${BASE_URL}/register`,
+  REDEEM_INVITE: `${BASE_URL}/redeem-invite`,
 };

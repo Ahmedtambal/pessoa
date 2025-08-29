@@ -5,6 +5,9 @@ from supabase import create_client, Client
 from typing import Optional
 from config.settings import settings
 from services.utils.audit_logger import log_event
+from fastapi import Depends
+from supabase import Client, create_client
+from .resume_analyzer import get_current_user
 
 router = APIRouter(prefix="", tags=["Auth"])
 
@@ -13,6 +16,12 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     password: str
     full_name: Optional[str] = None
+class RedeemInviteRequest(BaseModel):
+    email: str
+    password: str
+    full_name: Optional[str] = None
+    code: str
+
     organization_name: Optional[str] = None
 
 
@@ -147,3 +156,90 @@ def register_user(req: RegisterRequest, request: Request):
         pass
 
     return {'message': 'User created. Please check your email to confirm and then sign in.', 'user': user_info}
+
+
+@router.post('/redeem-invite')
+def redeem_invite(req: RedeemInviteRequest, request: Request):
+    """Create an auth user and profile using an approved invite code.
+
+    Flow:
+    - Validate invite exists, matches email, not expired/redeemed/revoked
+    - Create user via admin API (service role)
+    - Upsert profile with MEMBER role and inviter org
+    - Mark invite as redeemed
+    """
+    # 1) Validate invite
+    supabase: Client = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
+    inv = supabase.table('invites').select('*').eq('code', req.code).eq('email', req.email).eq('status', 'PENDING').single().execute()
+    if getattr(inv, 'error', None) or not inv.data:
+        raise HTTPException(status_code=400, detail='Invalid invite code or email')
+    invite = inv.data
+    from datetime import datetime, timezone
+    if invite.get('expires_at'):
+        try:
+            expires = datetime.fromisoformat(str(invite['expires_at']).replace('Z','+00:00'))
+            if expires < datetime.now(timezone.utc):
+                raise HTTPException(status_code=400, detail='Invite expired')
+        except Exception:
+            pass
+
+    # 2) Create auth user via Admin API
+    url = f"{settings.SUPABASE_URL}/auth/v1/admin/users"
+    headers = {
+        'apikey': settings.SUPABASE_SERVICE_ROLE_KEY,
+        'Authorization': f'Bearer {settings.SUPABASE_SERVICE_ROLE_KEY}',
+        'Content-Type': 'application/json'
+    }
+    payload = {
+        'email': req.email,
+        'password': req.password,
+        'user_metadata': { 'full_name': req.full_name or '' }
+    }
+    resp = requests.post(url, json=payload, headers=headers)
+    try:
+        data = resp.json()
+    except Exception:
+        raise HTTPException(status_code=500, detail='Unexpected response from auth provider')
+    if not resp.ok:
+        raise HTTPException(status_code=400, detail=data)
+
+    user = data.get('user') or data
+    user_id = user.get('id')
+
+    # 3) Upsert profile with organization from invite
+    profile_payload = { 'id': user_id, 'email': req.email, 'role': invite.get('role') or 'MEMBER' }
+    if req.full_name:
+        profile_payload['full_name'] = req.full_name
+    if invite.get('organization_name'):
+        profile_payload['organization_name'] = invite['organization_name']
+    if invite.get('organization_id'):
+        profile_payload['organization_id'] = invite['organization_id']
+
+    try:
+        supabase.table('profiles').upsert(profile_payload).execute()
+    except Exception as e:
+        # Cleanup auth user on failure
+        try:
+            cleanup_url = f"{settings.SUPABASE_URL}/auth/v1/admin/users/{user_id}"
+            requests.delete(cleanup_url, headers=headers)
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail='Failed to create profile')
+
+    # 4) Mark invite as redeemed
+    supabase.table('invites').update({ 'status': 'REDEEMED', 'used_by': user_id, 'used_at': 'now()' }).eq('id', invite['id']).execute()
+
+    try:
+        log_event(
+            supabase,
+            event_type='invite_redeem',
+            user_id=user_id,
+            email=req.email,
+            organization_name=invite.get('organization_name'),
+            details={'code': req.code},
+            request=request,
+        )
+    except Exception:
+        pass
+
+    return {'message': 'Account created from invite. Please sign in.', 'user': { 'id': user_id, 'email': req.email }}

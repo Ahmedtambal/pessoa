@@ -4,7 +4,7 @@ import MainLayout from '../components/layout/MainLayout';
 import { useProfile } from '../hooks/useProfile';
 import { supabase } from '../lib/supabaseClient';
 import authFetch from '../lib/authFetch';
-import { Send, Trash2, Edit, Check, X } from 'lucide-react';
+import { Trash2, Edit, Check, X, PlusCircle, Copy } from 'lucide-react';
 import CustomSelect from '../components/common/CustomSelect';
 import type { Profile } from '../hooks/useProfile';
 
@@ -35,12 +35,12 @@ const SettingsPage: React.FC = () => {
         <h1 className="text-3xl font-bold text-white">Admin Settings</h1>
         <div className="flex border-b border-white/10">
           <button onClick={() => setActiveTab('users')} className={`px-4 py-3 font-medium ${activeTab === 'users' ? 'text-primary border-b-2 border-primary' : 'text-white/60'}`}>User Management</button>
-          <button onClick={() => setActiveTab('invites')} className={`px-4 py-3 font-medium ${activeTab === 'invites' ? 'text-primary border-b-2 border-primary' : 'text-white/60'}`}>Invite Employees</button>
+          <button onClick={() => setActiveTab('invites')} className={`px-4 py-3 font-medium ${activeTab === 'invites' ? 'text-primary border-b-2 border-primary' : 'text-white/60'}`}>Whitelist & Codes</button>
           <button onClick={() => setActiveTab('organization')} className={`px-4 py-3 font-medium ${activeTab === 'organization' ? 'text-primary border-b-2 border-primary' : 'text-white/60'}`}>Organization</button>
         </div>
         <div className="glass-card p-8">
             {activeTab === 'users' && <UserManagement />}
-            {activeTab === 'invites' && <InviteEmployees />}
+            {activeTab === 'invites' && <WhitelistInvites />}
             {activeTab === 'organization' && <OrganizationSettings profile={profile} />}
         </div>
       </div>
@@ -152,65 +152,100 @@ const UserRow: React.FC<{user: AppUser, currentUserId: string | undefined, refre
     );
 };
 
-// --- INVITE EMPLOYEES COMPONENT ---
-const InviteEmployees = () => {
-    const [emails, setEmails] = useState('');
-    const [role, setRole] = useState<'ADMIN' | 'MEMBER'>('MEMBER');
-    const [loading, setLoading] = useState(false);
-    const [message, setMessage] = useState<{type: 'success' | 'error', text: string} | null>(null);
+// --- WHITELIST / INVITES VIA CODES ---
+const WhitelistInvites = () => {
+  const [email, setEmail] = useState('');
+  const [role, setRole] = useState<'ADMIN' | 'MEMBER'>('MEMBER');
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState<{type: 'success' | 'error', text: string} | null>(null);
+  const [invites, setInvites] = useState<any[]>([]);
 
-    const handleInvite = async () => {
-        setLoading(true); setMessage(null);
-        const emailList = emails.split(',').map(e => e.trim()).filter(Boolean);
-        if (emailList.length === 0) { setMessage({ type: 'error', text: 'Please enter at least one valid email.'}); setLoading(false); return; }
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) return;
-        try {
-            const response = await authFetch(API_ROUTES.ADMIN_INVITE, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ invites: emailList, role }),
-            });
-            if (!response.ok) {
-                // Try to parse JSON error returned by the backend. If parsing fails, fall back to status text.
-                let errorText = response.statusText || 'An unknown error occurred.';
-                try {
-                    const errorData = await response.json();
-                    // If backend provided a detail object, stringify a useful summary.
-                    if (errorData?.detail) {
-                        if (typeof errorData.detail === 'string') errorText = errorData.detail;
-                        else errorText = JSON.stringify(errorData.detail);
-                    } else if (errorData?.message) {
-                        errorText = errorData.message;
-                    }
-                } catch (e) {
-                    // ignore JSON parse errors and keep statusText
-                }
-                throw new Error(errorText || 'An unknown error occurred.');
-            }
-            setMessage({ type: 'success', text: 'Invitations sent successfully!'}); setEmails('');
-        } catch (error: any) {
-            setMessage({ type: 'error', text: error.message || 'Failed to send invitations.' });
-        }
-        setLoading(false);
-    };
+  const fetchInvites = useCallback(async () => {
+    try {
+      const resp = await authFetch(API_ROUTES.ADMIN_INVITES_LIST);
+      const data = await resp.json();
+      setInvites(Array.isArray(data) ? data : []);
+    } catch (e) {}
+  }, []);
 
-    return (
-        <div className="space-y-6">
-            <h2 className="text-2xl font-bold text-white">Invite New Members</h2>
-            <div className="space-y-4 max-w-lg">
-                <div>
-                    <label className="text-sm font-medium text-white/70 block mb-2">Email Addresses</label>
-                    <textarea value={emails} onChange={(e) => setEmails(e.target.value)} placeholder="Enter one or more emails, separated by commas" className="glass-input w-full min-h-[100px]" />
-                </div>
-                <div>
-                  <label className="text-sm font-medium text-white/70 block mb-2">Assign Role</label>
-                  <CustomSelect options={['MEMBER', 'ADMIN']} value={role} onChange={(value) => setRole(value as 'ADMIN' | 'MEMBER')} />
-                </div>
-                <button onClick={handleInvite} disabled={loading} className="primary-button w-48 flex justify-center"><Send className="w-4 h-4 mr-2" />{loading ? <div className="w-5 h-5 border-2 border-t-transparent rounded-full animate-spin"/> : 'Send Invites'}</button>
-                {message && <p className={`text-sm ${message.type === 'success' ? 'text-green-400' : 'text-red-400'}`}>{message.text}</p>}
-            </div>
+  useEffect(() => { fetchInvites(); }, [fetchInvites]);
+
+  const createInvite = async () => {
+    setLoading(true); setMessage(null);
+    if (!email) { setMessage({ type: 'error', text: 'Enter an email' }); setLoading(false); return; }
+    try {
+      const resp = await authFetch(API_ROUTES.ADMIN_INVITES_CREATE, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, role }),
+      });
+      if (!resp.ok) throw new Error((await resp.text()) || 'Failed to create invite');
+      setEmail('');
+      setMessage({ type: 'success', text: 'Invite code generated' });
+      fetchInvites();
+    } catch (e: any) {
+      setMessage({ type: 'error', text: e.message || 'Failed to create invite' });
+    }
+    setLoading(false);
+  };
+
+  const revokeInvite = async (code: string) => {
+    try {
+      const resp = await authFetch(API_ROUTES.ADMIN_INVITES_REVOKE, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) });
+      if (resp.ok) fetchInvites();
+    } catch {}
+  };
+
+  return (
+    <div className="space-y-6">
+      <h2 className="text-2xl font-bold text-white">Whitelist Emails & Generate Codes</h2>
+      <div className="space-y-4 max-w-xl">
+        <div className="relative">
+          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email to whitelist" className="glass-input w-full" />
         </div>
-    );
+        <div>
+          <label className="text-sm font-medium text-white/70 block mb-2">Assign Role</label>
+          <CustomSelect options={['MEMBER', 'ADMIN']} value={role} onChange={(value) => setRole(value as 'ADMIN' | 'MEMBER')} />
+        </div>
+        <button onClick={createInvite} disabled={loading} className="primary-button w-56 flex items-center justify-center gap-2"><PlusCircle className="w-4 h-4" />{loading ? 'Creating…' : 'Create Invite Code'}</button>
+        {message && <p className={`text-sm ${message.type === 'success' ? 'text-green-400' : 'text-red-400'}`}>{message.text}</p>}
+      </div>
+
+      <div className="mt-6">
+        <h3 className="text-xl font-semibold text-white mb-3">Active Invites</h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left">
+            <thead>
+              <tr className="border-b border-white/10">
+                <th className="p-3 text-sm text-white/70">Code</th>
+                <th className="p-3 text-sm text-white/70">Email</th>
+                <th className="p-3 text-sm text-white/70">Role</th>
+                <th className="p-3 text-sm text-white/70">Status</th>
+                <th className="p-3 text-sm text-white/70 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {invites.map((inv) => (
+                <tr key={inv.id} className="border-b border-white/5">
+                  <td className="p-3 font-mono text-white/90">{inv.code}</td>
+                  <td className="p-3 text-white/80">{inv.email}</td>
+                  <td className="p-3">{inv.role}</td>
+                  <td className="p-3">{inv.status}</td>
+                  <td className="p-3 text-right">
+                    <div className="flex gap-2 justify-end">
+                      <button onClick={() => navigator.clipboard.writeText(inv.code)} className="glass-button p-2" title="Copy code"><Copy className="w-4 h-4" /></button>
+                      {inv.status === 'PENDING' && (
+                        <button onClick={() => revokeInvite(inv.code)} className="glass-button p-2" title="Revoke"><Trash2 className="w-4 h-4 text-red-400" /></button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
 };
 
 // --- ORGANIZATION SETTINGS COMPONENT ---
