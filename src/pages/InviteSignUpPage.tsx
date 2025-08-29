@@ -26,13 +26,30 @@ const InviteSignUpPage: React.FC = () => {
         console.warn('Failed to sign out before processing invite:', e);
       }
 
-      // supabase.auth.getUser() will process the invite token from the URL and return the invited user.
+      // Parse access_token/refresh_token from URL (Supabase appends them after verify)
+      try {
+        const url = new URL(window.location.href);
+        const hash = window.location.hash?.replace(/^#/, '') || '';
+        const hashParams = new URLSearchParams(hash);
+        const queryParams = url.searchParams;
+        const accessToken = hashParams.get('access_token') || queryParams.get('access_token');
+        const refreshToken = hashParams.get('refresh_token') || queryParams.get('refresh_token');
+
+        if (accessToken && refreshToken) {
+          await supabase.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
+          // Clean tokens from URL for safety
+          window.history.replaceState({}, document.title, url.origin + url.pathname);
+        }
+      } catch (parseErr) {
+        console.warn('Could not parse/set invite tokens from URL:', parseErr);
+      }
+
+      // Now fetch the invited user
       const { data, error } = await supabase.auth.getUser();
       
       if (error || !data?.user) {
         // If there's an error or no user, the token is invalid or expired.
         setError("Invalid or expired invitation link. Please request a new one.");
-        setTimeout(() => navigate('/login'), 4000);
         return;
       }
       
