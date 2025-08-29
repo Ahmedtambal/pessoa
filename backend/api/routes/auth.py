@@ -22,6 +22,7 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     password: str
     full_name: Optional[str] = None
+    organization_name: Optional[str] = None
 class RedeemInviteRequest(BaseModel):
     email: str
     password: str
@@ -149,15 +150,7 @@ def register_user(req: RegisterRequest, request: Request):
     }
 
     try:
-        log_event(
-            supabase,
-            event_type='user_register',
-            user_id=user_id,
-            email=user.get('email'),
-            organization_name=profile_payload.get('organization_name'),
-            details={'role': role},
-            request=request,
-        )
+        log_event(supabase, action_type='user_register', user_id=user_id, metadata={'email': user.get('email'), 'org': profile_payload.get('organization_name'), 'role': role}, request=request)
     except Exception:
         pass
 
@@ -243,15 +236,7 @@ def redeem_invite(req: RedeemInviteRequest, request: Request):
     supabase.table('invites').update({ 'status': 'REDEEMED', 'used_by': user_id, 'used_at': 'now()' }).eq('id', invite['id']).execute()
 
     try:
-        log_event(
-            supabase,
-            event_type='invite_redeem',
-            user_id=user_id,
-            email=req.email,
-            organization_name=invite.get('organization_name'),
-            details={'code': req.code},
-            request=request,
-        )
+        log_event(supabase, action_type='invite_redeem', user_id=user_id, metadata={'email': req.email, 'code': req.code, 'org': invite.get('organization_name')}, request=request)
     except Exception:
         pass
 
