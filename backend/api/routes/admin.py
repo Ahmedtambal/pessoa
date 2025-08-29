@@ -247,12 +247,21 @@ async def invite_user_by_email(
     # Attempt to read the inviting admin's organization name so we can attach it to the invite metadata.
     org_name = None
     try:
-        profile_resp = supabase.table('profiles').select('organization_name').eq('id', current_user.get('id')).single().execute()
+        profile_resp = (
+            supabase
+            .table('profiles')
+            .select('organization_name, organization_id')
+            .eq('id', current_user.get('id'))
+            .single()
+            .execute()
+        )
         if profile_resp and profile_resp.data:
             org_name = profile_resp.data.get('organization_name')
+            org_id = profile_resp.data.get('organization_id')
     except Exception:
         # non-fatal; proceed without org metadata if lookup fails
         org_name = None
+        org_id = None
 
     for email in request.invites:
         try:
@@ -260,6 +269,10 @@ async def invite_user_by_email(
             options = {"redirect_to": "http://localhost:5173/invite-signup", "data": {"invited_by": current_user.get('id')}}
             if org_name:
                 options['data']['organization_name'] = org_name
+            if 'org_id' not in locals():
+                org_id = None
+            if org_id:
+                options['data']['organization_id'] = org_id
 
             response = supabase.auth.admin.invite_user_by_email(email, options)
             invited_users.append(response)
@@ -352,6 +365,8 @@ async def delete_organization(request: DeleteOrgRequest, supabase: Client = Depe
 class ProfileUpsertRequest(BaseModel):
     full_name: str | None = None
     organization_name: str | None = None
+    # Optionally allow passing email (will be validated from auth user)
+    email: str | None = None
 
 
 @router.post('/profile/upsert')
@@ -365,29 +380,59 @@ async def upsert_my_profile(request: ProfileUpsertRequest, current_user: dict = 
     """
     try:
         user_id = current_user.get('id')
+        # Read email and invite metadata from the auth user object (more trustworthy than client input)
+        auth_email = current_user.get('email') or current_user.get('user_metadata', {}).get('email')
+        invited_org_name = current_user.get('user_metadata', {}).get('organization_name')
+        invited_org_id = current_user.get('user_metadata', {}).get('organization_id')
+
         payload = {'id': user_id}
         if request.full_name:
             payload['full_name'] = request.full_name
-        if request.organization_name:
-            payload['organization_name'] = request.organization_name
+        # Persist email on the profile if available
+        if auth_email:
+            payload['email'] = auth_email
+        elif request.email:
+            payload['email'] = request.email
+
+        # Organization assignment priority:
+        # 1) Invite metadata (organization_id/name) from auth user
+        # 2) Explicit organization_name provided by the caller
+        org_name_to_use = invited_org_name or request.organization_name
+        if org_name_to_use:
+            payload['organization_name'] = org_name_to_use
 
         # Log the upsert attempt for debugging misassigned organizations
         print(f"[upsert_my_profile] upserting profile for user_id={user_id} with payload={payload}")
+
+        # If we have an org id in invite metadata, try to set it
+        if invited_org_id:
+            payload['organization_id'] = invited_org_id
 
         # Perform the profile upsert
         response = supabase.table('profiles').upsert(payload).execute()
         if getattr(response, 'error', None):
             raise HTTPException(status_code=500, detail=str(response.error))
 
-        # If the caller provided an organization_name, ensure the organizations
+        # If we have an organization_name, ensure the organizations
         # table contains a row for it. This keeps explicit org records in sync
         # with profiles that reference them. If the organizations table does
         # not exist on this Supabase instance, catch and ignore the error.
-        if request.organization_name:
+        if org_name_to_use:
             try:
-                org_resp = supabase.table('organizations').upsert({'name': request.organization_name}).execute()
+                # Upsert organization row and attempt to set organization_id if missing
+                org_resp = supabase.table('organizations').upsert({'name': org_name_to_use}).execute()
                 if getattr(org_resp, 'error', None):
                     print('[upsert_my_profile] organizations.upsert error:', org_resp.error)
+                else:
+                    try:
+                        # Lookup id and ensure profile has it
+                        lookup = supabase.table('organizations').select('id').eq('name', org_name_to_use).single().execute()
+                        if lookup and getattr(lookup, 'data', None):
+                            org_id = lookup.data.get('id')
+                            if org_id:
+                                supabase.table('profiles').update({'organization_id': org_id}).eq('id', user_id).execute()
+                    except Exception as _:
+                        pass
             except Exception as e:
                 print('[upsert_my_profile] could not upsert organizations row (table may be missing):', e)
 
