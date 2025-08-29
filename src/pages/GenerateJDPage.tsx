@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import MainLayout from '../components/layout/MainLayout';
 import CustomSelect from '../components/common/CustomSelect';
 import { API_ROUTES } from '../lib/api';
+import authFetch from '../lib/authFetch';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Copy, Check } from 'lucide-react';
 
@@ -38,7 +39,7 @@ const GenerateJDPage: React.FC = () => {
     setError(null);
 
     try {
-  const response = await fetch(API_ROUTES.GENERATE_JD, {
+      const response = await authFetch(API_ROUTES.GENERATE_JD, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
