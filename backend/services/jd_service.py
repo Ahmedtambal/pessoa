@@ -73,8 +73,8 @@ Now, generate the job description based on the user's data below.
                 supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
                 log_event(
                     supabase,
-                    event_type='jd_generate',
-                    details={'input_len': len(user_input or ''), 'output_len': len(content or '')},
+                    action_type='jd_generate',
+                    metadata={'input_len': len(user_input or ''), 'output_len': len(content or '')},
                 )
             except Exception:
                 pass

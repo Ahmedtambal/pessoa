@@ -120,10 +120,9 @@ async def compare_cvs_and_jd(
             supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
             log_event(
                 supabase,
-                event_type='cv_compare',
+                action_type='cv_compare',
                 user_id=current_user.get('id'),
-                organization_name=None,
-                details={'files': [f.filename for f in files], 'jd_len': len(jd or '')},
+                metadata={'files': [f.filename for f in files], 'jd_len': len(jd or '')},
                 request=request,
             )
         except Exception:
@@ -233,10 +232,11 @@ async def upload_and_process_resume(
         try:
             log_event(
                 supabase,
-                event_type='resume_upload',
+                action_type='resume_upload',
                 user_id=current_user.get('id'),
-                organization_name=None,
-                details={'resume_id': row.get('id'), 'file_name': file.filename},
+                target_type='resume',
+                target_id=str(row.get('id')),
+                metadata={'resume_id': row.get('id'), 'file_name': file.filename, 'storage_path': storage_path},
                 request=request,
             )
         except Exception:
@@ -358,6 +358,18 @@ async def delete_resumes(
             except Exception as e:
                 print("[delete_resumes] Exception deleting remaining IDs:", str(e))
 
+        try:
+            # Log delete action once with ids
+            log_event(
+                supabase,
+                action_type='resume_delete',
+                user_id=current_user.get('id'),
+                target_type='resume',
+                target_id=','.join(deleted_ids),
+                metadata={'deleted_ids': deleted_ids},
+            )
+        except Exception:
+            pass
         return {"deleted_ids": deleted_ids}
 
     except Exception as e:

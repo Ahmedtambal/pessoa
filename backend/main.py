@@ -7,6 +7,9 @@ import time
 from collections import defaultdict
 
 from api.routes import jd_generator, resume_analyzer, admin, auth  # <-- IMPORT NEW AUTH ROUTER
+from services.utils.audit_logger import log_event
+from supabase import create_client
+from config.settings import settings
 
 app = FastAPI(title="Pessoa AI Backend")
 
@@ -104,6 +107,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self.requests[client_ip].append(current_time)
 
         response = await call_next(request)
+        try:
+            # Basic request audit envelope (non-PII path)
+            supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
+            log_event(supabase, action_type='http_request', metadata={'path': str(request.url.path), 'method': request.method, 'status': response.status_code}, request=request)
+        except Exception:
+            pass
         return response
 
 

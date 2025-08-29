@@ -485,6 +485,13 @@ async def upsert_my_profile(request: ProfileUpsertRequest, current_user: dict = 
         if getattr(response, 'error', None):
             raise HTTPException(status_code=500, detail=str(response.error))
 
+        # Audit profile update
+        try:
+            from services.utils.audit_logger import log_event
+            log_event(supabase, action_type='profile_update', user_id=user_id, metadata={'full_name': request.full_name, 'organization_name': request.organization_name})
+        except Exception:
+            pass
+
         # If we have an organization_name, ensure the organizations
         # table contains a row for it. This keeps explicit org records in sync
         # with profiles that reference them. If the organizations table does

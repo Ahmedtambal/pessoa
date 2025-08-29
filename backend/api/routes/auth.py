@@ -8,6 +8,12 @@ from services.utils.audit_logger import log_event
 from fastapi import Depends
 from supabase import Client, create_client
 from .resume_analyzer import get_current_user
+class CookieConsentRequest(BaseModel):
+    necessary: bool = True
+    analytics: bool = False
+    marketing: bool = False
+    functional: bool = False
+
 
 router = APIRouter(prefix="", tags=["Auth"])
 
@@ -155,6 +161,13 @@ def register_user(req: RegisterRequest, request: Request):
     except Exception:
         pass
 
+    try:
+        from services.utils.audit_logger import log_event
+        from supabase import create_client
+        supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
+        log_event(supabase, action_type='register', user_id=user_id, metadata={'email': req.email, 'org': profile_payload.get('organization_name')}, request=request)
+    except Exception:
+        pass
     return {'message': 'User created. Please check your email to confirm and then sign in.', 'user': user_info}
 
 
@@ -242,4 +255,45 @@ def redeem_invite(req: RedeemInviteRequest, request: Request):
     except Exception:
         pass
 
+    try:
+        log_event(supabase, action_type='redeem_invite', user_id=user_id, metadata={'email': req.email, 'code': req.code, 'org': invite.get('organization_name')}, request=request)
+    except Exception:
+        pass
     return {'message': 'Account created from invite. Please sign in.', 'user': { 'id': user_id, 'email': req.email }}
+
+
+@router.post('/cookie-consent')
+def save_cookie_consent(req: CookieConsentRequest, request: Request, current_user: dict | None = Depends(lambda: None)):
+    """Persist cookie consent and audit the decision.
+
+    Works with or without an authenticated user (stores IP/UA and a null user).
+    """
+    supabase: Client = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
+    try:
+        payload = {
+            'user_id': (current_user or {}).get('id') if isinstance(current_user, dict) else None,
+            'consent_given': True,
+            'necessary_cookies': bool(req.necessary),
+            'analytics_cookies': bool(req.analytics),
+            'marketing_cookies': bool(req.marketing),
+            'functional_cookies': bool(req.functional),
+            'ip_address': request.client.host if request.client else None,
+            'user_agent': request.headers.get('user-agent'),
+        }
+        supabase.table('cookie_consent_log').insert(payload).execute()
+        try:
+            log_event(supabase, action_type='cookie_consent', user_id=payload['user_id'], metadata={
+                'necessary': payload['necessary_cookies'],
+                'analytics': payload['analytics_cookies'],
+                'marketing': payload['marketing_cookies'],
+                'functional': payload['functional_cookies'],
+            }, request=request)
+        except Exception:
+            pass
+        return {'message': 'Consent saved'}
+    except Exception as e:
+        try:
+            log_event(supabase, action_type='cookie_consent', status='FAIL', metadata={'error': str(e)}, request=request)
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail='Failed to save cookie consent')
