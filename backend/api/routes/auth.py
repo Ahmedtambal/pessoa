@@ -128,10 +128,12 @@ def register_user(req: RegisterRequest, request: Request):
             # The user can still register and we'll set up organizations later
             print('[register_user] Organization handling skipped (table may not exist):', str(e))
 
-    profile_payload['role'] = role
+    profile_payload['role'] = role  # Force ADMIN for org self-signup
 
     try:
         supabase.table('profiles').upsert(profile_payload).execute()
+        # Ensure role is ADMIN even if a previous MEMBER row exists
+        supabase.table('profiles').update({'role': role}).eq('id', user_id).execute()
     except Exception as e:
         print('[register_user] profile upsert error:', e)
         # Attempt to clean up the created auth user to avoid orphaned users
