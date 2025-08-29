@@ -38,10 +38,22 @@ const InviteSignUpPage: React.FC = () => {
         const queryParams = url.searchParams;
         const typeParam = (queryParams.get('type') || '').toLowerCase();
         const tokenHash = queryParams.get('token_hash') || queryParams.get('token');
+        const token = queryParams.get('token') || undefined;
+        const code = queryParams.get('code') || undefined;
         const accessToken = hashParams.get('access_token') || queryParams.get('access_token');
         const refreshToken = hashParams.get('refresh_token') || queryParams.get('refresh_token');
 
-        debugLog('parsed URL params', { typeParam, hasTokenHash: !!tokenHash, hasAccessToken: !!accessToken, hasRefreshToken: !!refreshToken });
+        debugLog('parsed URL params', { typeParam, hasTokenHash: !!tokenHash, hasToken: !!token, hasCode: !!code, hasAccessToken: !!accessToken, hasRefreshToken: !!refreshToken });
+
+        // OAuth-style flow fallback (rare): exchange code for session
+        if (code) {
+          try {
+            const { data: xData, error: xErr } = await supabase.auth.exchangeCodeForSession(code);
+            debugLog('exchangeCodeForSession', { xData, xErr });
+          } catch (xEx) {
+            console.warn('exchangeCodeForSession exception:', xEx);
+          }
+        }
 
         // If Supabase redirected with token_hash (common for invite links), verify it to create a session
         if (!accessToken && tokenHash && (typeParam === 'invite' || typeParam === 'signup')) {
@@ -56,6 +68,21 @@ const InviteSignUpPage: React.FC = () => {
             }
           } catch (vEx) {
             console.warn('verifyOtp exception:', vEx);
+          }
+        }
+
+        // Fallback: some providers return raw token instead of token_hash
+        if (!accessToken) {
+          if (token && (typeParam === 'invite' || typeParam === 'signup')) {
+            try {
+              const { data: v2Data, error: v2Err } = await (supabase.auth as any).verifyOtp({ token, type: 'invite' });
+              debugLog('verifyOtp (token) result', { v2Data, v2Err });
+              if (!v2Err && v2Data?.session) {
+                await supabase.auth.setSession({ access_token: v2Data.session.access_token, refresh_token: v2Data.session.refresh_token });
+              }
+            } catch (v2Ex) {
+              console.warn('verifyOtp (token) exception:', v2Ex);
+            }
           }
         }
 
