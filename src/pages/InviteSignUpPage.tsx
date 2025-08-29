@@ -50,6 +50,7 @@ const InviteSignUpPage: React.FC = () => {
       if (error || !data?.user) {
         // If there's an error or no user, the token is invalid or expired.
         setError("Invalid or expired invitation link. Please request a new one.");
+        setIsLoading(false);
         return;
       }
       
