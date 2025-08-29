@@ -156,7 +156,6 @@ def register_user(req: RegisterRequest, request: Request):
 
     try:
         from services.utils.audit_logger import log_event
-        from supabase import create_client
         supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
         log_event(supabase, action_type='register', user_id=user_id, metadata={'email': req.email, 'org': profile_payload.get('organization_name')}, request=request)
     except Exception:
