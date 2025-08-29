@@ -73,7 +73,7 @@ const SignUpPage: React.FC = () => {
           errBody = await resp.text();
         }
         console.error('Register failed', resp.status, errBody);
-        const message = (errBody && (errBody.detail || errBody.message)) || String(errBody) || `Request failed (${resp.status})`;
+        const message = (errBody && (errBody.detail || errBody.message || errBody.msg)) || String(errBody) || `Request failed (${resp.status})`;
         setError(message);
         return;
       }
