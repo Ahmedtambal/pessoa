@@ -13,15 +13,19 @@ const InviteSignUpPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const navigate = useNavigate();
+  const isDebug = (typeof window !== 'undefined' && (import.meta.env.DEV || new URL(window.location.href).searchParams.get('debug') === '1'));
+  const debugLog = (...args: any[]) => { if (isDebug) console.log('[invite-signup]', ...args); };
 
   // --- THIS IS THE FIX ---
   // We now use a more direct and reliable method to get the invited user's data.
   useEffect(() => {
     const processInvite = async () => {
+      debugLog('processInvite: starting');
       // Ensure no other session is present (e.g. an admin logged in on the same browser)
       // so that the invite token in the URL is processed for the invited user.
       try {
         await supabase.auth.signOut();
+        debugLog('signed out any existing session');
       } catch (e) {
         console.warn('Failed to sign out before processing invite:', e);
       }
@@ -37,13 +41,18 @@ const InviteSignUpPage: React.FC = () => {
         const accessToken = hashParams.get('access_token') || queryParams.get('access_token');
         const refreshToken = hashParams.get('refresh_token') || queryParams.get('refresh_token');
 
+        debugLog('parsed URL params', { typeParam, hasTokenHash: !!tokenHash, hasAccessToken: !!accessToken, hasRefreshToken: !!refreshToken });
+
         // If Supabase redirected with token_hash (common for invite links), verify it to create a session
         if (!accessToken && tokenHash && (typeParam === 'invite' || typeParam === 'signup')) {
           try {
             const { data: vData, error: vErr } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type: 'invite' as any });
+            debugLog('verifyOtp result', { vData, vErr });
             if (vErr) console.warn('verifyOtp (invite) failed:', vErr);
             if (vData?.session) {
               await supabase.auth.setSession({ access_token: vData.session.access_token, refresh_token: vData.session.refresh_token });
+              const { data: sData } = await supabase.auth.getSession();
+              debugLog('setSession (verifyOtp) -> session', sData);
             }
           } catch (vEx) {
             console.warn('verifyOtp exception:', vEx);
@@ -52,6 +61,8 @@ const InviteSignUpPage: React.FC = () => {
 
         if (accessToken && refreshToken) {
           await supabase.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
+          const { data: sData } = await supabase.auth.getSession();
+          debugLog('setSession (tokens-in-url) -> session', sData);
           // Clean tokens from URL for safety
           window.history.replaceState({}, document.title, url.origin + url.pathname);
         }
@@ -61,6 +72,7 @@ const InviteSignUpPage: React.FC = () => {
 
       // Now fetch the invited user
       const { data, error } = await supabase.auth.getUser();
+      debugLog('getUser after session setup', { data, error });
       
       if (error || !data?.user) {
         // If there's an error or no user, the token is invalid or expired.
@@ -100,7 +112,7 @@ const InviteSignUpPage: React.FC = () => {
       password: formData.password,
       data: { full_name: formData.fullName.trim() }
     });
-    console.log('updateUser result:', { data, error });
+    debugLog('updateUser result', { data, error });
 
     setIsLoading(false);
 
@@ -111,7 +123,7 @@ const InviteSignUpPage: React.FC = () => {
       try {
         // Fetch the latest user object to read any metadata that was attached to the invite (invited_by, organization_name)
         const { data: fresh, error: freshError } = await supabase.auth.getUser();
-        console.log('fresh user fetch after updateUser:', { fresh, freshError });
+        debugLog('fresh user fetch after updateUser', { fresh, freshError });
         if (freshError) {
           console.warn('Could not fetch user metadata after signup:', freshError);
         }
@@ -139,7 +151,7 @@ const InviteSignUpPage: React.FC = () => {
           });
           const json = await resp.json();
           if (!resp.ok) console.warn('Profile upsert endpoint returned error:', json);
-          else console.log('Profile upserted via backend:', json);
+          else debugLog('Profile upserted via backend', json);
         } catch (e) {
           console.warn('Failed to call backend profile upsert endpoint:', e);
         }
