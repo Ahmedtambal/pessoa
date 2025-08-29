@@ -26,14 +26,29 @@ const InviteSignUpPage: React.FC = () => {
         console.warn('Failed to sign out before processing invite:', e);
       }
 
-      // Parse access_token/refresh_token from URL (Supabase appends them after verify)
+      // Parse invite params and tokens from URL
       try {
         const url = new URL(window.location.href);
         const hash = window.location.hash?.replace(/^#/, '') || '';
         const hashParams = new URLSearchParams(hash);
         const queryParams = url.searchParams;
+        const typeParam = (queryParams.get('type') || '').toLowerCase();
+        const tokenHash = queryParams.get('token_hash') || queryParams.get('token');
         const accessToken = hashParams.get('access_token') || queryParams.get('access_token');
         const refreshToken = hashParams.get('refresh_token') || queryParams.get('refresh_token');
+
+        // If Supabase redirected with token_hash (common for invite links), verify it to create a session
+        if (!accessToken && tokenHash && (typeParam === 'invite' || typeParam === 'signup')) {
+          try {
+            const { data: vData, error: vErr } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type: 'invite' as any });
+            if (vErr) console.warn('verifyOtp (invite) failed:', vErr);
+            if (vData?.session) {
+              await supabase.auth.setSession({ access_token: vData.session.access_token, refresh_token: vData.session.refresh_token });
+            }
+          } catch (vEx) {
+            console.warn('verifyOtp exception:', vEx);
+          }
+        }
 
         if (accessToken && refreshToken) {
           await supabase.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
