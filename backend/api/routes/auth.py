@@ -94,7 +94,7 @@ def register_user(req: RegisterRequest, request: Request):
     # 2) Upsert profile and organization using service-role client
     supabase: Client = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY)
 
-    profile_payload = { 'id': user_id }
+    profile_payload = { 'id': user_id, 'email': req.email }
     if req.full_name:
         profile_payload['full_name'] = req.full_name
 

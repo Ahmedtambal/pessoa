@@ -146,18 +146,17 @@ async def revoke_invite(req: RevokeInviteRequest, supabase: Client = Depends(get
 
 
 @router.get("/users", dependencies=[Depends(is_admin_user)])
-async def list_users(supabase: Client = Depends(get_supabase_admin_client)):
+async def list_users(current_user: dict = Depends(get_current_user), supabase: Client = Depends(get_supabase_admin_client)):
     try:
-        # Try the improved RPC function first
-        response = supabase.rpc('get_users_with_profiles').execute()
+        # Determine admin org
+        org_resp = supabase.table('profiles').select('organization_name').eq('id', current_user.get('id')).single().execute()
+        org_name = (org_resp.data or {}).get('organization_name') if org_resp and getattr(org_resp, 'data', None) else None
+        if not org_name:
+            return []
+        # Return only users in the same org
+        response = supabase.table('profiles').select('id, full_name, email, organization_name, role, created_at').eq('organization_name', org_name).order('created_at', desc=True).execute()
         if getattr(response, 'error', None):
-            print('[list_users] get_users_with_profiles error:', response.error)
-            # Try the fallback RPC function
-            response = supabase.rpc('get_profiles_only').execute()
-            if getattr(response, 'error', None):
-                print('[list_users] get_profiles_only error:', response.error)
-                raise Exception(response.error)
-
+            raise Exception(response.error)
         return response.data or []
 
     except Exception as e:
@@ -191,16 +190,25 @@ async def list_users(supabase: Client = Depends(get_supabase_admin_client)):
             )
 
 @router.put("/users/{user_id}", dependencies=[Depends(is_admin_user)])
-async def update_user_role(user_id: str, update: UserUpdate, supabase: Client = Depends(get_supabase_admin_client)):
+async def update_user_role(user_id: str, update: UserUpdate, current_user: dict = Depends(get_current_user), supabase: Client = Depends(get_supabase_admin_client)):
+    # Enforce same-organization
+    admin_org = supabase.table('profiles').select('organization_name').eq('id', current_user.get('id')).single().execute()
+    target = supabase.table('profiles').select('organization_name').eq('id', user_id).single().execute()
+    if not admin_org or not target or not getattr(admin_org, 'data', None) or not getattr(target, 'data', None) or admin_org.data.get('organization_name') != target.data.get('organization_name'):
+        raise HTTPException(status_code=403, detail='Forbidden: cross-organization update')
     response = supabase.table('profiles').update({'role': update.role}).eq('id', user_id).execute()
     return response.data
 
 @router.delete("/users/{user_id}", dependencies=[Depends(is_admin_user)])
-async def delete_user(user_id: str, supabase: Client = Depends(get_supabase_admin_client)):
+async def delete_user(user_id: str, current_user: dict = Depends(get_current_user), supabase: Client = Depends(get_supabase_admin_client)):
     # Before deleting the auth user, check their profile role and organization.
     print(f"[delete_user] request for user_id={user_id}")
     try:
+        # Enforce same-organization
+        admin_org = supabase.table('profiles').select('organization_name').eq('id', current_user.get('id')).single().execute()
         profile_resp = supabase.table('profiles').select('role, organization_name').eq('id', user_id).single().execute()
+        if not admin_org or not getattr(admin_org, 'data', None) or not profile_resp or not getattr(profile_resp, 'data', None) or admin_org.data.get('organization_name') != profile_resp.data.get('organization_name'):
+            raise HTTPException(status_code=403, detail='Forbidden: cross-organization delete')
         if getattr(profile_resp, 'error', None):
             print('[delete_user] profile lookup error:', profile_resp.error)
             raise HTTPException(status_code=500, detail=str(profile_resp.error))
@@ -469,8 +477,11 @@ async def upsert_my_profile(request: ProfileUpsertRequest, current_user: dict = 
         # Organization assignment priority:
         # 1) Invite metadata (organization_id/name) from auth user
         # 2) Explicit organization_name provided by the caller
-        org_name_to_use = invited_org_name or request.organization_name
-        if org_name_to_use:
+        # Prevent cross-org reassignment: allow setting organization_name only if not previously set
+        existing = supabase.table('profiles').select('organization_name').eq('id', user_id).single().execute()
+        existing_org = (existing.data or {}).get('organization_name') if existing and getattr(existing, 'data', None) else None
+        org_name_to_use = invited_org_name or (request.organization_name if not existing_org else existing_org)
+        if org_name_to_use and not existing_org:
             payload['organization_name'] = org_name_to_use
 
         # Log the upsert attempt for debugging misassigned organizations

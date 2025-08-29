@@ -12,18 +12,7 @@ const UpdatePasswordPage: React.FC = () => {
   const [success, setSuccess] = useState<string | null>(null);
   const navigate = useNavigate();
 
-  // Clear any existing session or tokens when arriving at the password update page.
-  // This avoids an automatic sign-in via token in the URL and forces the user to sign in again.
-  React.useEffect(() => {
-    (async () => {
-      try {
-        await supabase.auth.signOut();
-      } catch (e) {
-        // non-fatal
-        console.warn('Could not sign out on UpdatePassword mount:', e);
-      }
-    })();
-  }, []);
+  // Keep session alive; sign out only after successful password change
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
