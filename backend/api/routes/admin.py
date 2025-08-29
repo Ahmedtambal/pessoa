@@ -263,10 +263,14 @@ async def invite_user_by_email(
         org_name = None
         org_id = None
 
+    # Derive production-safe redirect target
+    frontend = os.getenv('FRONTEND_URL') or 'https://pessoa-frontend.onrender.com'
+    redirect_target = f"{frontend.rstrip('/')}/invite-signup"
+
     for email in request.invites:
         try:
             # Pass an options dict including redirect URL and invite metadata (inviter id + organization)
-            options = {"redirect_to": "http://localhost:5173/invite-signup", "data": {"invited_by": current_user.get('id')}}
+            options = {"redirect_to": redirect_target, "data": {"invited_by": current_user.get('id')}}
             if org_name:
                 options['data']['organization_name'] = org_name
             if 'org_id' not in locals():
