@@ -15,6 +15,7 @@ const InviteSignUpPage: React.FC = () => {
   const navigate = useNavigate();
   const isDebug = (typeof window !== 'undefined' && (import.meta.env.DEV || new URL(window.location.href).searchParams.get('debug') === '1'));
   const debugLog = (...args: any[]) => { if (isDebug) console.log('[invite-signup]', ...args); };
+  const [debugInfo, setDebugInfo] = useState<any>(null);
 
   // --- THIS IS THE FIX ---
   // We now use a more direct and reliable method to get the invited user's data.
@@ -43,13 +44,16 @@ const InviteSignUpPage: React.FC = () => {
         const accessToken = hashParams.get('access_token') || queryParams.get('access_token');
         const refreshToken = hashParams.get('refresh_token') || queryParams.get('refresh_token');
 
-        debugLog('parsed URL params', { typeParam, hasTokenHash: !!tokenHash, hasToken: !!token, hasCode: !!code, hasAccessToken: !!accessToken, hasRefreshToken: !!refreshToken });
+        const parsed = { typeParam, hasTokenHash: !!tokenHash, hasToken: !!token, hasCode: !!code, hasAccessToken: !!accessToken, hasRefreshToken: !!refreshToken };
+        debugLog('parsed URL params', parsed);
+        setDebugInfo((prev: any) => ({ ...(prev||{}), parsed }));
 
         // OAuth-style flow fallback (rare): exchange code for session
         if (code) {
           try {
             const { data: xData, error: xErr } = await supabase.auth.exchangeCodeForSession(code);
             debugLog('exchangeCodeForSession', { xData, xErr });
+            setDebugInfo((prev: any) => ({ ...(prev||{}), exchange: { xData, xErr } }));
           } catch (xEx) {
             console.warn('exchangeCodeForSession exception:', xEx);
           }
@@ -60,11 +64,13 @@ const InviteSignUpPage: React.FC = () => {
           try {
             const { data: vData, error: vErr } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type: 'invite' as any });
             debugLog('verifyOtp result', { vData, vErr });
+            setDebugInfo((prev: any) => ({ ...(prev||{}), verifyHash: { vData, vErr } }));
             if (vErr) console.warn('verifyOtp (invite) failed:', vErr);
             if (vData?.session) {
               await supabase.auth.setSession({ access_token: vData.session.access_token, refresh_token: vData.session.refresh_token });
               const { data: sData } = await supabase.auth.getSession();
               debugLog('setSession (verifyOtp) -> session', sData);
+              setDebugInfo((prev: any) => ({ ...(prev||{}), sessionAfterVerify: sData }));
             }
           } catch (vEx) {
             console.warn('verifyOtp exception:', vEx);
@@ -77,6 +83,7 @@ const InviteSignUpPage: React.FC = () => {
             try {
               const { data: v2Data, error: v2Err } = await (supabase.auth as any).verifyOtp({ token, type: 'invite' });
               debugLog('verifyOtp (token) result', { v2Data, v2Err });
+              setDebugInfo((prev: any) => ({ ...(prev||{}), verifyToken: { v2Data, v2Err } }));
               if (!v2Err && v2Data?.session) {
                 await supabase.auth.setSession({ access_token: v2Data.session.access_token, refresh_token: v2Data.session.refresh_token });
               }
@@ -100,6 +107,7 @@ const InviteSignUpPage: React.FC = () => {
       // Now fetch the invited user
       const { data, error } = await supabase.auth.getUser();
       debugLog('getUser after session setup', { data, error });
+      setDebugInfo((prev: any) => ({ ...(prev||{}), getUser: { data, error } }));
       
       if (error || !data?.user) {
         // If there's an error or no user, the token is invalid or expired.
@@ -203,6 +211,12 @@ const InviteSignUpPage: React.FC = () => {
 
         {error && <div className="bg-red-500/20 text-red-300 text-center p-3 rounded-lg mb-6">{error}</div>}
         {success && <div className="bg-green-500/20 text-green-300 text-center p-3 rounded-lg mb-6">{success}</div>}
+        {isDebug && (
+          <div className="bg-white/5 text-white/80 text-xs p-3 rounded mb-4 overflow-auto max-h-48">
+            <div className="font-semibold mb-1">Debug Info</div>
+            <pre className="whitespace-pre-wrap break-all">{JSON.stringify(debugInfo, null, 2)}</pre>
+          </div>
+        )}
         
         <form onSubmit={handleSubmit} className="space-y-6">
           <div className="space-y-4">
